@@ -8,18 +8,18 @@ RUN apt-get update && apt-get install -y curl \
 
 WORKDIR /app
 
+# Copy application code
+COPY . .
+
 # Install Python dependencies
-COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy frontend and build
-COPY frontend ./frontend
+# Build frontend
 WORKDIR /app/frontend
 RUN npm install && npm run build
 
-# Copy the rest of the application
+# Return to app root
 WORKDIR /app
-COPY . .
 
 # Ensure static directory exists
 RUN mkdir -p static/audio
