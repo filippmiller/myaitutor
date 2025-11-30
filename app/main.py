@@ -30,6 +30,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(progress.router, prefix="/api/progress", tags=["progress"])
 
 # Static files (Audio)
+os.makedirs("static/audio", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Serve Frontend (Build)
