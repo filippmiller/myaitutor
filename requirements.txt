@@ -12,5 +12,5 @@ email-validator
 psycopg2-binary
 bcrypt
 argon2-cffi
-deepgram-sdk
+deepgram-sdk>=3.0.0
 aiohttp
