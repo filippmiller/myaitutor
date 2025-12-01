@@ -11,6 +11,7 @@ import openai
 import os
 import aiohttp
 import sys
+import traceback
 
 # Try to import Deepgram safely
 DEEPGRAM_AVAILABLE = False
