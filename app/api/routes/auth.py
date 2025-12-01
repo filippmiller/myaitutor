@@ -42,6 +42,7 @@ def register(
             raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
             
         # Create UserAccount
+        print(f"DEBUG: Hashing password of length {len(data.password)}")
         hashed_pwd = get_password_hash(data.password)
         new_user = UserAccount(
             email=data.email,
@@ -63,15 +64,6 @@ def register(
         )
         db.add(new_profile)
         db.commit()
-        
-        # Create Session
-        session = create_session_for_user(db, new_user, request)
-        
-        # Create JWT
-        access_token = create_access_token(subject=str(new_user.id))
-        
-        # Set Cookie
-        set_session_cookie(response, session.id, session.expires_at)
         
         return AuthResponse(
             user=UserAccountRead.from_orm(new_user),
