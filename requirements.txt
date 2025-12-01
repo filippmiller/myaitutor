@@ -11,3 +11,4 @@ python-jose[cryptography]
 email-validator
 psycopg2-binary
 bcrypt
+argon2-cffi
