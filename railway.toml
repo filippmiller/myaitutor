@@ -1,0 +1,6 @@
+[build]
+builder = "docker"
+dockerfile = "Dockerfile"
+
+[deploy]
+startCommand = "./start.sh"
