@@ -9,10 +9,15 @@ from app.services.auth_service import verify_session_id
 from app.services.openai_service import SYSTEM_TUTOR_PROMPT
 try:
     from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
+except ImportError:
+    try:
+        from deepgram import DeepgramClient
+        from deepgram.clients.live.v1 import LiveTranscriptionEvents, LiveOptions
+    except ImportError:
+        print("CRITICAL: Could not import Deepgram classes")
+        raise
 except Exception as e:
     print(f"!!!!!!!!!!!!!! DEEPGRAM IMPORT ERROR: {e}")
-    import traceback
-    traceback.print_exc()
     raise e
 import openai
 import os
