@@ -27,8 +27,5 @@ RUN mkdir -p static/audio
 # Set environment variables
 ENV PORT=8080
 
-# Make start script executable and fix line endings
-RUN sed -i 's/\r$//' start.sh && chmod +x start.sh
-
 # Start command
-CMD ["./start.sh"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
