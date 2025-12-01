@@ -7,7 +7,13 @@ from app.database import get_session
 from app.models import AppSettings, UserAccount, LessonSession, LessonTurn, UserProfile, SessionMessage
 from app.services.auth_service import verify_session_id
 from app.services.openai_service import SYSTEM_TUTOR_PROMPT
-from deepgram import DeepgramClient, DeepgramClientOptions, LiveTranscriptionEvents, LiveOptions
+try:
+    from deepgram import DeepgramClient, DeepgramClientOptions, LiveTranscriptionEvents, LiveOptions
+except Exception as e:
+    print(f"!!!!!!!!!!!!!! DEEPGRAM IMPORT ERROR: {e}")
+    import traceback
+    traceback.print_exc()
+    raise e
 import openai
 import os
 import aiohttp
