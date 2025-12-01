@@ -84,64 +84,81 @@ export default function Student() {
     };
 
     const startLesson = async () => {
+        console.log('🚀 [START LESSON] Initiating...');
         try {
             // 1. Get Microphone Access
+            console.log('🎤 [MICROPHONE] Requesting access...');
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            console.log('✅ [MICROPHONE] Access granted');
 
             // 2. Connect WebSocket (Cookies will be sent automatically)
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/api/voice-lesson/ws`;
+            console.log(`🔌 [WEBSOCKET] Creating connection to: ${wsUrl}`);
             const ws = new WebSocket(wsUrl);
             wsRef.current = ws;
 
             setConnectionStatus('Connecting...');
+            console.log('⏳ [STATE] Connection status: Connecting...');
 
             ws.onopen = () => {
+                console.log('✅ [WEBSOCKET] Connection OPENED');
                 setConnectionStatus('Connected');
                 setIsRecording(true);
+                console.log('🎙️ [STATE] Connection status: Connected, Recording started');
 
                 // 3. Start MediaRecorder
                 const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
                 mediaRecorderRef.current = mediaRecorder;
+                console.log('🎬 [RECORDER] MediaRecorder created');
 
                 mediaRecorder.ondataavailable = (e) => {
                     if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+                        console.log(`📤 [AUDIO] Sending chunk: ${e.data.size} bytes`);
                         ws.send(e.data);
                     }
                 };
 
                 mediaRecorder.start(250); // Send chunks every 250ms
+                console.log('▶️ [RECORDER] Started (250ms chunks)');
             };
 
             ws.onmessage = async (event) => {
                 if (typeof event.data === 'string') {
+                    console.log('📨 [WEBSOCKET] Received text message:', event.data);
                     // Text message (Transcript)
                     const msg = JSON.parse(event.data);
                     if (msg.type === 'transcript') {
+                        console.log(`💬 [TRANSCRIPT] ${msg.role}: ${msg.text}`);
                         setTranscript(prev => [...prev, { role: msg.role, text: msg.text }]);
                     }
                 } else {
+                    console.log('📨 [WEBSOCKET] Received binary message (audio)');
                     // Binary message (Audio)
                     const audioBlob = new Blob([event.data], { type: 'audio/mp3' });
                     const audioUrl = URL.createObjectURL(audioBlob);
                     const audio = new Audio(audioUrl);
                     audio.play();
+                    console.log('🔊 [AUDIO] Playing AI response');
                 }
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
+                console.log(`❌ [WEBSOCKET] Connection CLOSED - Code: ${event.code}, Reason: ${event.reason || 'No reason provided'}, Clean: ${event.wasClean}`);
                 setConnectionStatus('Disconnected');
                 setIsRecording(false);
                 stopMediaRecorder();
+                console.log('🛑 [STATE] Connection status: Disconnected, Recording stopped');
             };
 
             ws.onerror = (e) => {
-                console.error("WebSocket error:", e);
+                console.error("💥 [WEBSOCKET] ERROR:", e);
                 setConnectionStatus('Error');
+                console.log('⚠️ [STATE] Connection status: Error');
             };
 
         } catch (err) {
-            console.error('Error accessing microphone:', err);
+            console.error('💥 [ERROR] Failed to start lesson:', err);
             alert('Could not access microphone');
         }
     };

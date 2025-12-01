@@ -20,40 +20,38 @@ LiveOptions = None
 
 try:
     import deepgram
-    print(f"Deepgram Version: {getattr(deepgram, '__version__', 'unknown')}")
+    print(f"Deepgram Module: {deepgram}")
     
-    # Attempt to get classes directly from the module
-    DeepgramClient = getattr(deepgram, 'DeepgramClient', None)
-    
-    # Try different locations for LiveTranscriptionEvents and LiveOptions
-    LiveTranscriptionEvents = getattr(deepgram, 'LiveTranscriptionEvents', None)
-    LiveOptions = getattr(deepgram, 'LiveOptions', None)
+    # Attempt to get DeepgramClient
+    if hasattr(deepgram, 'DeepgramClient'):
+        DeepgramClient = deepgram.DeepgramClient
+    else:
+        # Try importing from deepgram directly
+        from deepgram import DeepgramClient
 
-    # If still missing, try to find them in the client module or providers
-    if not LiveTranscriptionEvents:
-         try:
-             from deepgram.clients.live.v1 import LiveTranscriptionEvents
-         except ImportError:
-             pass
+    # Try to find LiveTranscriptionEvents and LiveOptions
+    # They might be in deepgram.clients.live.v1 or just deepgram
+    try:
+        from deepgram import LiveTranscriptionEvents
+    except ImportError:
+        try:
+            from deepgram.clients.live.v1 import LiveTranscriptionEvents
+        except ImportError:
+            pass
 
-    if not LiveOptions:
-         try:
-             from deepgram.clients.live.v1 import LiveOptions
-         except ImportError:
-             pass
-    
-    # If still missing, maybe they are not needed or named differently?
-    # Let's try to proceed if we at least have DeepgramClient
+    try:
+        from deepgram import LiveOptions
+    except ImportError:
+        try:
+            from deepgram.clients.live.v1 import LiveOptions
+        except ImportError:
+            pass
+
     if DeepgramClient:
         DEEPGRAM_AVAILABLE = True
         print("DeepgramClient loaded successfully")
-        if not LiveTranscriptionEvents:
-            print("WARNING: LiveTranscriptionEvents not found")
-        if not LiveOptions:
-            print("WARNING: LiveOptions not found")
     else:
         print("DeepgramClient not found")
-        DEEPGRAM_AVAILABLE = False
 
 except Exception as e:
     print(f"Deepgram Setup Error: {e}")
@@ -66,18 +64,42 @@ if not DEEPGRAM_AVAILABLE:
 
 router = APIRouter()
 
+@router.get("/voice-lesson/health")
+async def voice_lesson_health(session: Session = Depends(get_session)):
+    """Health check for voice lesson prerequisites"""
+    from app.services.auth_service import get_current_user
+    from fastapi import Request, Depends as FastAPIDepends
+    
+    result = {
+        "deepgram_available": DEEPGRAM_AVAILABLE,
+        "deepgram_client": DeepgramClient is not None,
+    }
+    
+    # Check settings
+    settings = session.get(AppSettings, 1)
+    result["settings_exist"] = settings is not None
+    result["deepgram_key_set"] = bool(settings and settings.deepgram_api_key)
+    result["openai_key_set"] = bool(settings and settings.openai_api_key)
+    
+    return result
+
 @router.websocket("/voice-lesson/ws")
 async def voice_lesson_ws(
     websocket: WebSocket,
     session: Session = Depends(get_session)
 ):
+    print("=" * 80)
+    print("🔌 [WEBSOCKET] New connection attempt")
     await websocket.accept()
+    print("✅ [WEBSOCKET] Connection accepted")
     
     # 1. Authentication
     # Try query param first, then cookie
     token = websocket.query_params.get("token")
     if not token:
         token = websocket.cookies.get("session_id")
+    
+    print(f"🔑 [AUTH] Token found: {bool(token)}")
         
     user = None
     if token:
@@ -85,35 +107,42 @@ async def voice_lesson_ws(
             user_id = verify_session_id(token, session)
             if user_id:
                 user = session.get(UserAccount, user_id)
+                print(f"✅ [AUTH] User authenticated: {user.email if user else 'None'}")
         except Exception as e:
-            print(f"Auth error: {e}")
+            print(f"❌ [AUTH] Error: {e}")
             pass
             
     if not user:
-        print("WebSocket Auth Failed")
+        print("❌ [AUTH] Authentication failed - closing connection")
         await websocket.close(code=1008, reason="Unauthorized")
         return
 
     # 2. Get Settings
     settings = session.get(AppSettings, 1)
     if not settings or not settings.deepgram_api_key or not settings.openai_api_key:
-        print("Settings missing")
+        print("❌ [SETTINGS] Missing API keys")
         await websocket.close(code=1011, reason="Server configuration missing")
         return
+    
+    print(f"✅ [SETTINGS] API keys present - Deepgram: {bool(settings.deepgram_api_key)}, OpenAI: {bool(settings.openai_api_key)}")
 
     # 3. Create Lesson Session
     lesson_session = LessonSession(user_account_id=user.id)
     session.add(lesson_session)
     session.commit()
     session.refresh(lesson_session)
+    print(f"✅ [SESSION] Lesson session created: {lesson_session.id}")
 
     # 4. Setup Deepgram
     if not DEEPGRAM_AVAILABLE:
-        print("Deepgram not available")
+        print("❌ [DEEPGRAM] SDK not available")
         await websocket.close(code=1011, reason="Deepgram SDK missing")
         return
+    
+    print("✅ [DEEPGRAM] SDK available")
 
     try:
+        print("Initializing Deepgram...")
         # Initialize Deepgram Client
         deepgram = DeepgramClient(settings.deepgram_api_key)
         
@@ -127,86 +156,91 @@ async def voice_lesson_ws(
         user_profile = session.exec(select(UserProfile).where(UserProfile.user_account_id == user.id)).first()
         
         async def on_message(self, result, **kwargs):
-            sentence = result.channel.alternatives[0].transcript
-            if len(sentence) == 0:
-                return
-            
-            if result.is_final:
-                print(f"User said: {sentence}")
-                # 1. Save User Turn
-                user_turn = LessonTurn(
-                    session_id=lesson_session.id,
-                    speaker="user",
-                    text=sentence
-                )
-                session.add(user_turn)
-                session.commit()
+            try:
+                sentence = result.channel.alternatives[0].transcript
+                if len(sentence) == 0:
+                    return
                 
-                # 2. Send "User finished speaking" signal to frontend
-                await websocket.send_json({"type": "transcript", "role": "user", "text": sentence})
+                if result.is_final:
+                    print(f"User said: {sentence}")
+                    # 1. Save User Turn
+                    user_turn = LessonTurn(
+                        session_id=lesson_session.id,
+                        speaker="user",
+                        text=sentence
+                    )
+                    session.add(user_turn)
+                    session.commit()
+                    
+                    # 2. Send "User finished speaking" signal to frontend
+                    await websocket.send_json({"type": "transcript", "role": "user", "text": sentence})
 
-                # 3. Call OpenAI
-                messages = [
-                    {"role": "system", "content": SYSTEM_TUTOR_PROMPT},
-                    {"role": "system", "content": f"Student Name: {user_profile.name if user_profile else 'Student'}. Level: {user_profile.english_level if user_profile else 'A1'}."}
-                ]
-                
-                # Add recent context
-                recent_turns = session.exec(select(LessonTurn).where(LessonTurn.session_id == lesson_session.id).order_by(LessonTurn.created_at.desc()).limit(10)).all()
-                for turn in reversed(recent_turns):
-                    messages.append({"role": turn.speaker, "content": turn.text})
-                
-                print("Calling OpenAI...")
-                response = await openai_client.chat.completions.create(
-                    model=settings.default_model,
-                    messages=messages
-                )
-                ai_text = response.choices[0].message.content
-                print(f"AI said: {ai_text}")
-                
-                # 4. Save Assistant Turn
-                ai_turn = LessonTurn(
-                    session_id=lesson_session.id,
-                    speaker="assistant",
-                    text=ai_text
-                )
-                session.add(ai_turn)
-                session.commit()
+                    # 3. Call OpenAI
+                    messages = [
+                        {"role": "system", "content": SYSTEM_TUTOR_PROMPT},
+                        {"role": "system", "content": f"Student Name: {user_profile.name if user_profile else 'Student'}. Level: {user_profile.english_level if user_profile else 'A1'}."}
+                    ]
+                    
+                    # Add recent context
+                    recent_turns = session.exec(select(LessonTurn).where(LessonTurn.session_id == lesson_session.id).order_by(LessonTurn.created_at.desc()).limit(10)).all()
+                    for turn in reversed(recent_turns):
+                        messages.append({"role": turn.speaker, "content": turn.text})
+                    
+                    print("Calling OpenAI...")
+                    response = await openai_client.chat.completions.create(
+                        model=settings.default_model,
+                        messages=messages
+                    )
+                    ai_text = response.choices[0].message.content
+                    print(f"AI said: {ai_text}")
+                    
+                    # 4. Save Assistant Turn
+                    ai_turn = LessonTurn(
+                        session_id=lesson_session.id,
+                        speaker="assistant",
+                        text=ai_text
+                    )
+                    session.add(ai_turn)
+                    session.commit()
 
-                # 5. Send Text to Frontend
-                await websocket.send_json({"type": "transcript", "role": "assistant", "text": ai_text})
+                    # 5. Send Text to Frontend
+                    await websocket.send_json({"type": "transcript", "role": "assistant", "text": ai_text})
 
-                # 6. TTS via Deepgram REST API
-                tts_url = f"https://api.deepgram.com/v1/speak?model={settings.deepgram_voice_id}"
-                headers = {
-                    "Authorization": f"Token {settings.deepgram_api_key}",
-                    "Content-Type": "application/json"
-                }
-                payload = {"text": ai_text}
-                
-                async with aiohttp.ClientSession() as http_session:
-                    async with http_session.post(tts_url, headers=headers, json=payload) as resp:
-                        if resp.status == 200:
-                            audio_data = await resp.read()
-                            # Send audio binary
-                            # We send a text message first to say "audio coming" or just send bytes?
-                            # WebSocket can distinguish text vs bytes frames.
-                            await websocket.send_bytes(audio_data)
-                        else:
-                            print(f"TTS Error: {await resp.text()}")
+                    # 6. TTS via Deepgram REST API
+                    tts_url = f"https://api.deepgram.com/v1/speak?model={settings.deepgram_voice_id}"
+                    headers = {
+                        "Authorization": f"Token {settings.deepgram_api_key}",
+                        "Content-Type": "application/json"
+                    }
+                    payload = {"text": ai_text}
+                    
+                    async with aiohttp.ClientSession() as http_session:
+                        async with http_session.post(tts_url, headers=headers, json=payload) as resp:
+                            if resp.status == 200:
+                                audio_data = await resp.read()
+                                # Send audio binary
+                                await websocket.send_bytes(audio_data)
+                            else:
+                                print(f"TTS Error: {await resp.text()}")
+            except Exception as e:
+                print(f"Error in on_message: {e}")
+                traceback.print_exc()
 
         # Register event handler
         event_name = LiveTranscriptionEvents.Transcript if LiveTranscriptionEvents else "Results"
+        print(f"Registering event handler for: {event_name}")
         dg_connection.on(event_name, on_message)
 
         # Configure Deepgram Options
         if LiveOptions:
+            print("Using LiveOptions class")
             options = LiveOptions(
                 model="nova-2", 
                 language="en-US", 
                 smart_format=True,
             )
         else:
+            print("Using options dictionary")
             # Fallback to dictionary if LiveOptions class is missing
             options = {
                 "model": "nova-2",
@@ -215,9 +249,10 @@ async def voice_lesson_ws(
             }
         
         # Start Deepgram Connection
+        print("Starting Deepgram connection...")
         if await dg_connection.start(options) is False:
             print("Failed to start Deepgram connection")
-            await websocket.close()
+            await websocket.close(code=1011, reason="Deepgram connection failed")
             return
 
         print("Deepgram connected, listening...")
@@ -240,4 +275,5 @@ async def voice_lesson_ws(
 
     except Exception as e:
         print(f"Setup Error: {e}")
+        traceback.print_exc()
         await websocket.close(code=1011, reason=str(e))
