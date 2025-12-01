@@ -158,10 +158,10 @@ async def voice_lesson_ws(
         print("🔧 [DEEPGRAM] Creating connection...")
         
         # Open Deepgram v2 connection as context manager
+        # Browser sends WebM, Deepgram auto-detects format from headers
         with deepgram.listen.v2.connect(
             model="nova-2",
-            encoding="linear16",
-            sample_rate="16000"
+            smart_format=True
         ) as dg_connection:
             print("✅ [DEEPGRAM] Connection created")
 
