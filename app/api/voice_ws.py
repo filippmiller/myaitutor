@@ -7,24 +7,39 @@ from app.database import get_session
 from app.models import AppSettings, UserAccount, LessonSession, LessonTurn, UserProfile, SessionMessage
 from app.services.auth_service import verify_session_id
 from app.services.openai_service import SYSTEM_TUTOR_PROMPT
-try:
-    import deepgram
-    print(f"!!!!!!!!!!!!!! DEEPGRAM VERSION: {getattr(deepgram, '__version__', 'unknown')}")
-    print(f"!!!!!!!!!!!!!! DEEPGRAM DIR: {dir(deepgram)}")
-    from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
-except ImportError:
-    try:
-        from deepgram import DeepgramClient
-        from deepgram.clients.live.v1 import LiveTranscriptionEvents, LiveOptions
-    except ImportError:
-        print("CRITICAL: Could not import Deepgram classes")
-        raise
-except Exception as e:
-    print(f"!!!!!!!!!!!!!! DEEPGRAM IMPORT ERROR: {e}")
-    raise e
 import openai
 import os
 import aiohttp
+import sys
+
+# Try to import Deepgram safely
+DEEPGRAM_AVAILABLE = False
+DeepgramClient = None
+LiveTranscriptionEvents = None
+LiveOptions = None
+
+try:
+    import deepgram
+    print(f"Deepgram Version: {getattr(deepgram, '__version__', 'unknown')}")
+    print(f"Deepgram Dir: {dir(deepgram)}")
+    
+    # Try top-level import (v3 standard)
+    from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
+    DEEPGRAM_AVAILABLE = True
+except ImportError:
+    print("Deepgram top-level import failed. Trying submodules...")
+    try:
+        from deepgram import DeepgramClient
+        from deepgram.clients.live.v1 import LiveTranscriptionEvents, LiveOptions
+        DEEPGRAM_AVAILABLE = True
+    except ImportError as e:
+        print(f"Deepgram submodule import failed: {e}")
+except Exception as e:
+    print(f"Deepgram import error: {e}")
+
+if not DEEPGRAM_AVAILABLE:
+    print("WARNING: Deepgram SDK not available. Voice features will fail.")
+
 
 router = APIRouter()
 
@@ -66,6 +81,11 @@ async def voice_lesson_ws(
     session.refresh(lesson_session)
 
     # 4. Setup Deepgram
+    if not DEEPGRAM_AVAILABLE:
+        print("Deepgram not available")
+        await websocket.close(code=1011, reason="Deepgram SDK missing")
+        return
+
     try:
         # Initialize Deepgram Client
         deepgram = DeepgramClient(settings.deepgram_api_key)
