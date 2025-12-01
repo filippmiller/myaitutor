@@ -24,17 +24,35 @@ try:
     
     # Attempt to get classes directly from the module
     DeepgramClient = getattr(deepgram, 'DeepgramClient', None)
+    
+    # In Deepgram SDK v3, these might be enums or classes inside clients
+    # But for now, let's try to import them from deepgram directly as a fallback
+    # If they are not found, we will try to find them in the client module
+    
     LiveTranscriptionEvents = getattr(deepgram, 'LiveTranscriptionEvents', None)
     LiveOptions = getattr(deepgram, 'LiveOptions', None)
 
+    if not LiveTranscriptionEvents:
+         # Try to find it in deepgram.clients.live.v1
+         try:
+             from deepgram.clients.live.v1 import LiveTranscriptionEvents
+         except ImportError:
+             pass
+
+    if not LiveOptions:
+         try:
+             from deepgram.clients.live.v1 import LiveOptions
+         except ImportError:
+             pass
+
     if DeepgramClient and LiveTranscriptionEvents and LiveOptions:
         DEEPGRAM_AVAILABLE = True
-        print("Deepgram classes loaded via getattr")
+        print("Deepgram classes loaded successfully")
     else:
-        # Fallback for older versions or different structures
+        print(f"Deepgram classes missing: Client={bool(DeepgramClient)}, Events={bool(LiveTranscriptionEvents)}, Options={bool(LiveOptions)}")
+        # Try one last desperate import
         from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
         DEEPGRAM_AVAILABLE = True
-        print("Deepgram classes loaded via import")
 
 except Exception as e:
     print(f"Deepgram Setup Error: {e}")
