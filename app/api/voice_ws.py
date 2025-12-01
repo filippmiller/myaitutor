@@ -21,21 +21,25 @@ LiveOptions = None
 try:
     import deepgram
     print(f"Deepgram Version: {getattr(deepgram, '__version__', 'unknown')}")
-    print(f"Deepgram Dir: {dir(deepgram)}")
     
-    # Try top-level import (v3 standard)
-    from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
-    DEEPGRAM_AVAILABLE = True
-except ImportError:
-    print("Deepgram top-level import failed. Trying submodules...")
-    try:
-        from deepgram import DeepgramClient
-        from deepgram.clients.live.v1 import LiveTranscriptionEvents, LiveOptions
+    # Attempt to get classes directly from the module
+    DeepgramClient = getattr(deepgram, 'DeepgramClient', None)
+    LiveTranscriptionEvents = getattr(deepgram, 'LiveTranscriptionEvents', None)
+    LiveOptions = getattr(deepgram, 'LiveOptions', None)
+
+    if DeepgramClient and LiveTranscriptionEvents and LiveOptions:
         DEEPGRAM_AVAILABLE = True
-    except ImportError as e:
-        print(f"Deepgram submodule import failed: {e}")
+        print("Deepgram classes loaded via getattr")
+    else:
+        # Fallback for older versions or different structures
+        from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
+        DEEPGRAM_AVAILABLE = True
+        print("Deepgram classes loaded via import")
+
 except Exception as e:
-    print(f"Deepgram import error: {e}")
+    print(f"Deepgram Setup Error: {e}")
+    import traceback
+    traceback.print_exc()
 
 if not DEEPGRAM_AVAILABLE:
     print("WARNING: Deepgram SDK not available. Voice features will fail.")
