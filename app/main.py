@@ -33,13 +33,33 @@ app.include_router(progress.router, prefix="/api/progress", tags=["progress"])
 os.makedirs("static/audio", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Serve Frontend (Build)
-# We will assume frontend is built to /frontend/dist and we serve it.
-# For development, we might just rely on Vite server, but for "deployment ready" we serve static.
-# Let's check if dist exists, if so serve it.
+# Serve Frontend (SPA Support)
 if os.path.exists("frontend/dist"):
-    app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend")
+    # Mount assets (if they exist in dist/assets)
+    if os.path.exists("frontend/dist/assets"):
+        app.mount("/assets", StaticFiles(directory="frontend/dist/assets"), name="assets")
+    
+    # Serve index.html for root and catch-all
+    from fastapi.responses import FileResponse
+    
+    @app.get("/")
+    async def read_index():
+        return FileResponse("frontend/dist/index.html")
+
+    @app.get("/{full_path:path}")
+    async def catch_all(full_path: str):
+        # Allow API routes to pass through (already handled above)
+        if full_path.startswith("api"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Not Found")
+            
+        # Check if file exists in dist (e.g. favicon.ico)
+        file_path = os.path.join("frontend/dist", full_path)
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+            
+        # Otherwise serve index.html for client-side routing
+        return FileResponse("frontend/dist/index.html")
 else:
-    # Fallback for local dev if not built
     print("Frontend build not found. Run 'npm run build' in frontend/ directory.")
 
