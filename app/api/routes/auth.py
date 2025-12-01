@@ -32,47 +32,58 @@ def register(
     request: Request, 
     db: Session = Depends(get_session)
 ):
-    # Check if user exists
-    existing_user = db.exec(select(UserAccount).where(UserAccount.email == data.email)).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    if len(data.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    try:
+        # Check if user exists
+        existing_user = db.exec(select(UserAccount).where(UserAccount.email == data.email)).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
         
-    # Create UserAccount
-    hashed_pwd = get_password_hash(data.password)
-    new_user = UserAccount(
-        email=data.email,
-        hashed_password=hashed_pwd,
-        full_name=data.full_name
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    # Create UserProfile
-    new_profile = UserProfile(
-        name=data.full_name or data.email.split("@")[0],
-        english_level="A1", # Default
-        user_account_id=new_user.id
-    )
-    db.add(new_profile)
-    db.commit()
-    
-    # Create Session
-    session = create_session_for_user(db, new_user, request)
-    
-    # Create JWT
-    access_token = create_access_token(subject=str(new_user.id))
-    
-    # Set Cookie
-    set_session_cookie(response, session.id, session.expires_at)
-    
-    return AuthResponse(
-        user=UserAccountRead.from_orm(new_user),
-        access_token=access_token
-    )
+        if len(data.password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+            
+        # Create UserAccount
+        hashed_pwd = get_password_hash(data.password)
+        new_user = UserAccount(
+            email=data.email,
+            hashed_password=hashed_pwd,
+            full_name=data.full_name
+        )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        
+        if not new_user.id:
+            raise HTTPException(status_code=500, detail="Failed to create user account ID")
+
+        # Create UserProfile
+        new_profile = UserProfile(
+            name=data.full_name or data.email.split("@")[0],
+            english_level="A1", # Default
+            user_account_id=new_user.id
+        )
+        db.add(new_profile)
+        db.commit()
+        
+        # Create Session
+        session = create_session_for_user(db, new_user, request)
+        
+        # Create JWT
+        access_token = create_access_token(subject=str(new_user.id))
+        
+        # Set Cookie
+        set_session_cookie(response, session.id, session.expires_at)
+        
+        return AuthResponse(
+            user=UserAccountRead.from_orm(new_user),
+            access_token=access_token
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"Registration Error: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @router.post("/login", response_model=AuthResponse)
 def login(
