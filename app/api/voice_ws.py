@@ -196,15 +196,23 @@ async def voice_lesson_ws(
                             print(f"TTS Error: {await resp.text()}")
 
         # Register event handler
-        dg_connection.on(LiveTranscriptionEvents.Transcript, on_message)
+        event_name = LiveTranscriptionEvents.Transcript if LiveTranscriptionEvents else "Results"
+        dg_connection.on(event_name, on_message)
 
         # Configure Deepgram Options
-        options = LiveOptions(
-            model="nova-2", 
-            language="en-US", 
-            smart_format=True,
-            # encoding is omitted to allow auto-detection (e.g. for webm/opus)
-        )
+        if LiveOptions:
+            options = LiveOptions(
+                model="nova-2", 
+                language="en-US", 
+                smart_format=True,
+            )
+        else:
+            # Fallback to dictionary if LiveOptions class is missing
+            options = {
+                "model": "nova-2",
+                "language": "en-US",
+                "smart_format": True
+            }
         
         # Start Deepgram Connection
         if await dg_connection.start(options) is False:
