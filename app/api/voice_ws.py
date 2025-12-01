@@ -142,12 +142,6 @@ async def voice_lesson_ws(
     
     print("✅ [DEEPGRAM] SDK available")
 
-    try:
-        print("🔧 [DEEPGRAM] Initializing client...")
-        # Initialize Deepgram Client (v5+ uses api_key parameter)
-        deepgram = DeepgramClient(api_key=settings.deepgram_api_key)
-        print("✅ [DEEPGRAM] Client initialized")
-
     # OpenAI Client
     openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
 
@@ -156,6 +150,7 @@ async def voice_lesson_ws(
 
     try:
         print("🔧 [DEEPGRAM] Initializing client...")
+        # Initialize Deepgram Client (v5+ uses api_key parameter)
         deepgram = DeepgramClient(api_key=settings.deepgram_api_key)
         print("✅ [DEEPGRAM] Client initialized")
 
