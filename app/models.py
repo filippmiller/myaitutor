@@ -8,6 +8,25 @@ class AppSettings(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     openai_api_key: Optional[str] = None
     default_model: str = Field(default="gpt-4o-mini")
+    deepgram_api_key: Optional[str] = None
+    deepgram_voice_id: str = Field(default="aura-asteria-en")
+
+class LessonSession(SQLModel, table=True):
+    __tablename__ = "lesson_sessions"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_account_id: int = Field(foreign_key="user_accounts.id", index=True)
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    ended_at: Optional[datetime] = None
+    duration_seconds: Optional[int] = None
+    status: str = Field(default="active") # active, completed, error
+
+class LessonTurn(SQLModel, table=True):
+    __tablename__ = "lesson_turns"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(foreign_key="lesson_sessions.id", index=True)
+    speaker: str # "user" or "assistant"
+    text: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class UserProfile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

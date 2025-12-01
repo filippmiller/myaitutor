@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import create_db_and_tables
-from app.api import admin, voice
+from app.api import admin, voice, voice_ws
 from app.api.routes import auth, progress
 import os
 
@@ -26,6 +26,7 @@ def on_startup():
 # Routes
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(voice.router, prefix="/api", tags=["voice"])
+app.include_router(voice_ws.router, prefix="/api", tags=["voice_ws"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(progress.router, prefix="/api/progress", tags=["progress"])
 

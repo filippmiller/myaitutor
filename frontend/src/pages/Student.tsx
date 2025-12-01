@@ -19,10 +19,8 @@ export default function Student() {
         pains: ''
     });
     const [isRecording, setIsRecording] = useState(false);
-    const [lastUserText, setLastUserText] = useState('');
-    const [lastAssistantText, setLastAssistantText] = useState('');
-    const [audioUrl, setAudioUrl] = useState<string | null>(null);
-    const [loading, setLoading] = useState(false);
+    const [connectionStatus, setConnectionStatus] = useState('Disconnected');
+    const [transcript, setTranscript] = useState<Array<{ role: string, text: string }>>([]);
 
     const [progress, setProgress] = useState<ProgressResponse | null>(null);
     const [activeTab, setActiveTab] = useState<'chat' | 'progress'>('chat');
@@ -31,7 +29,8 @@ export default function Student() {
     const navigate = useNavigate();
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-    const chunksRef = useRef<Blob[]>([]);
+    const wsRef = useRef<WebSocket | null>(null);
+    const chatEndRef = useRef<HTMLDivElement | null>(null);
 
     const handleAuthError = async (res: Response) => {
         if (res.status === 401) {
@@ -62,6 +61,10 @@ export default function Student() {
             });
     }, []);
 
+    useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [transcript]);
+
     const saveProfile = async () => {
         const params = new URLSearchParams();
         params.append('name', profile.name);
@@ -80,70 +83,95 @@ export default function Student() {
         alert('Profile saved!');
     };
 
-    const startRecording = async () => {
+    const getSessionId = () => {
+        const match = document.cookie.match(new RegExp('(^| )session_id=([^;]+)'));
+        if (match) return match[2];
+        return null;
+    };
+
+    const startLesson = async () => {
+        const sessionId = getSessionId();
+        if (!sessionId) {
+            alert("Session not found. Please log in again.");
+            return;
+        }
+
         try {
+            // 1. Get Microphone Access
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const mediaRecorder = new MediaRecorder(stream);
-            mediaRecorderRef.current = mediaRecorder;
-            chunksRef.current = [];
 
-            mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0) chunksRef.current.push(e.data);
+            // 2. Connect WebSocket
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/api/voice-lesson/ws?token=${sessionId}`;
+            const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
+
+            setConnectionStatus('Connecting...');
+
+            ws.onopen = () => {
+                setConnectionStatus('Connected');
+                setIsRecording(true);
+
+                // 3. Start MediaRecorder
+                const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                mediaRecorderRef.current = mediaRecorder;
+
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+                        ws.send(e.data);
+                    }
+                };
+
+                mediaRecorder.start(250); // Send chunks every 250ms
             };
 
-            mediaRecorder.onstop = async () => {
-                const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-                await sendAudio(blob);
-                stream.getTracks().forEach(track => track.stop());
+            ws.onmessage = async (event) => {
+                if (typeof event.data === 'string') {
+                    // Text message (Transcript)
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'transcript') {
+                        setTranscript(prev => [...prev, { role: msg.role, text: msg.text }]);
+                    }
+                } else {
+                    // Binary message (Audio)
+                    const audioBlob = new Blob([event.data], { type: 'audio/mp3' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    const audio = new Audio(audioUrl);
+                    audio.play();
+                }
             };
 
-            mediaRecorder.start();
-            setIsRecording(true);
+            ws.onclose = () => {
+                setConnectionStatus('Disconnected');
+                setIsRecording(false);
+                stopMediaRecorder();
+            };
+
+            ws.onerror = (e) => {
+                console.error("WebSocket error:", e);
+                setConnectionStatus('Error');
+            };
+
         } catch (err) {
             console.error('Error accessing microphone:', err);
             alert('Could not access microphone');
         }
     };
 
-    const stopRecording = () => {
-        if (mediaRecorderRef.current && isRecording) {
+    const stopMediaRecorder = () => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
-            setIsRecording(false);
+            mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
         }
     };
 
-    const sendAudio = async (blob: Blob) => {
-        setLoading(true);
-        const formData = new FormData();
-        formData.append('audio_file', blob, 'voice.webm');
-
-        try {
-            const res = await fetch('/api/voice_chat', {
-                method: 'POST',
-                body: formData
-            });
-
-            if (await handleAuthError(res)) return;
-
-            if (!res.ok) {
-                const err = await res.json();
-                alert('Error: ' + err.detail);
-                return;
-            }
-
-            const data = await res.json();
-            setLastUserText(data.user_text);
-            setLastAssistantText(data.assistant_text);
-            setAudioUrl(data.audio_url);
-
-            // Refresh progress
-            progressApi.getProgress().then(setProgress);
-        } catch (e) {
-            console.error(e);
-            alert('Error sending audio');
-        } finally {
-            setLoading(false);
+    const stopLesson = () => {
+        if (wsRef.current) {
+            wsRef.current.close();
         }
+        stopMediaRecorder();
+        setIsRecording(false);
+        setConnectionStatus('Disconnected');
     };
 
     return (
@@ -201,37 +229,54 @@ export default function Student() {
                     </div>
 
                     <div className="card">
-                        <h2>Voice Chat</h2>
-                        <button
-                            onMouseDown={startRecording}
-                            onMouseUp={stopRecording}
-                            onTouchStart={startRecording}
-                            onTouchEnd={stopRecording}
-                            style={{
-                                backgroundColor: isRecording ? 'red' : '#1a1a1a',
-                                fontSize: '1.2em',
-                                width: '100%',
-                                marginBottom: '20px'
-                            }}
-                        >
-                            {isRecording ? 'Listening... (Release to send)' : 'Hold to Speak'}
-                        </button>
+                        <h2>Voice Lesson</h2>
 
-                        {loading && <p>Thinking...</p>}
-
-                        {(lastUserText || lastAssistantText) && (
-                            <div className="chat-box">
-                                <p><strong>You:</strong> {lastUserText}</p>
-                                <hr style={{ borderColor: '#444' }} />
-                                <p><strong>Tutor:</strong> {lastAssistantText}</p>
-
-                                {audioUrl && (
-                                    <div style={{ marginTop: '10px' }}>
-                                        <audio controls src={audioUrl} autoPlay style={{ width: '100%' }} />
-                                    </div>
-                                )}
-                            </div>
+                        {!isRecording ? (
+                            <button
+                                onClick={startLesson}
+                                style={{
+                                    backgroundColor: '#4CAF50',
+                                    fontSize: '1.2em',
+                                    width: '100%',
+                                    marginBottom: '20px',
+                                    padding: '15px'
+                                }}
+                            >
+                                Start Live Lesson
+                            </button>
+                        ) : (
+                            <button
+                                onClick={stopLesson}
+                                style={{
+                                    backgroundColor: '#f44336',
+                                    fontSize: '1.2em',
+                                    width: '100%',
+                                    marginBottom: '20px',
+                                    padding: '15px'
+                                }}
+                            >
+                                End Lesson
+                            </button>
                         )}
+
+                        <div className="status-indicator" style={{ marginBottom: '10px', color: '#888' }}>
+                            Status: {connectionStatus}
+                        </div>
+
+                        <div className="chat-box" style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {transcript.map((t, i) => (
+                                <div key={i} style={{
+                                    alignSelf: t.role === 'user' ? 'flex-end' : 'flex-start',
+                                    backgroundColor: t.role === 'user' ? '#2a2a2a' : '#1a3a5a',
+                                    padding: '10px',
+                                    borderRadius: '8px',
+                                    maxWidth: '80%'
+                                }}>
+                                    <strong>{t.role === 'user' ? 'You' : 'Tutor'}:</strong> {t.text}
+                                </div>
+                            ))}
+                            <div ref={chatEndRef} />
+                        </div>
                     </div>
                 </>
             ) : (

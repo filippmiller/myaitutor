@@ -70,3 +70,19 @@ async def get_current_user(request: Request, db: Session = Depends(get_session))
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
         
     return user
+
+def verify_session_id(session_id: str, db: Session) -> int | None:
+    if not session_id:
+        return None
+    
+    auth_session = db.get(AuthSession, session_id)
+    if not auth_session:
+        return None
+        
+    if auth_session.is_revoked:
+        return None
+        
+    if auth_session.expires_at < datetime.utcnow():
+        return None
+        
+    return auth_session.user_id
