@@ -50,8 +50,12 @@ async def voice_lesson_ws(
 ):
     await websocket.accept()
     
-    # 1. Authentication (via query param 'token' which is the session_id)
+    # 1. Authentication
+    # Try query param first, then cookie
     token = websocket.query_params.get("token")
+    if not token:
+        token = websocket.cookies.get("session_id")
+        
     user = None
     if token:
         try:
