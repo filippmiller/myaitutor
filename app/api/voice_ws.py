@@ -8,6 +8,9 @@ from app.models import AppSettings, UserAccount, LessonSession, LessonTurn, User
 from app.services.auth_service import verify_session_id
 from app.services.openai_service import SYSTEM_TUTOR_PROMPT
 try:
+    import deepgram
+    print(f"!!!!!!!!!!!!!! DEEPGRAM VERSION: {getattr(deepgram, '__version__', 'unknown')}")
+    print(f"!!!!!!!!!!!!!! DEEPGRAM DIR: {dir(deepgram)}")
     from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
 except ImportError:
     try:
