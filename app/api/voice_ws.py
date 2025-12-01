@@ -157,127 +157,145 @@ async def voice_lesson_ws(
         # Configure Deepgram connection
         print("🔧 [DEEPGRAM] Creating connection...")
         
-        # Open Deepgram v2 connection as context manager
-        # Browser sends WebM, Deepgram auto-detects format from headers
-        with deepgram.listen.v2.connect(
-            model="nova-2"
-        ) as dg_connection:
-            print("✅ [DEEPGRAM] Connection created")
+        # Create a connection using the standard Live API
+        dg_connection = deepgram.listen.live.v("1")
 
-            # Define event handlers
-            async def handle_open(_):
-                print("🎧 [DEEPGRAM] Connection opened")
+        # Define event handlers
+        async def handle_open(self, open, **kwargs):
+            print(f"🎧 [DEEPGRAM] Connection opened: {open}")
 
-            async def handle_message(message):
-                try:
-                    # Check if it's a transcript message with the expected structure
-                    if hasattr(message, 'channel') and hasattr(message.channel, 'alternatives'):
-                        sentence = message.channel.alternatives[0].transcript
-                        if not sentence or len(sentence) == 0:
-                            return
-                        
-                        if hasattr(message, 'is_final') and message.is_final:
-                            print(f"📝 [USER] Said: {sentence}")
-                            # 1. Save User Turn
-                            user_turn = LessonTurn(
-                                session_id=lesson_session.id,
-                                speaker="user",
-                                text=sentence
-                            )
-                            session.add(user_turn)
-                            session.commit()
-                            
-                            # 2. Send "User finished speaking" signal to frontend
-                            await websocket.send_json({"type": "transcript", "role": "user", "text": sentence})
-
-                            # 3. Call OpenAI
-                            messages = [
-                                {"role": "system", "content": SYSTEM_TUTOR_PROMPT},
-                                {"role": "system", "content": f"Student Name: {user_profile.name if user_profile else 'Student'}. Level: {user_profile.english_level if user_profile else 'A1'}."}
-                            ]
-                            
-                            # Add recent context
-                            recent_turns = session.exec(select(LessonTurn).where(LessonTurn.session_id == lesson_session.id).order_by(LessonTurn.created_at.desc()).limit(10)).all()
-                            for turn in reversed(recent_turns):
-                                messages.append({"role": turn.speaker, "content": turn.text})
-                            
-                            print("🤖 [OPENAI] Calling...")
-                            response = await openai_client.chat.completions.create(
-                                model=settings.default_model,
-                                messages=messages
-                            )
-                            ai_text = response.choices[0].message.content
-                            print(f"💬 [AI] Said: {ai_text}")
-                            
-                            # 4. Save Assistant Turn
-                            ai_turn = LessonTurn(
-                                session_id=lesson_session.id,
-                                speaker="assistant",
-                                text=ai_text
-                            )
-                            session.add(ai_turn)
-                            session.commit()
-
-                            # 5. Send Text to Frontend
-                            await websocket.send_json({"type": "transcript", "role": "assistant", "text": ai_text})
-
-                            # 6. TTS via Deepgram REST API
-                            tts_url = f"https://api.deepgram.com/v1/speak?model={settings.deepgram_voice_id}"
-                            headers = {
-                                "Authorization": f"Token {settings.deepgram_api_key}",
-                                "Content-Type": "application/json"
-                            }
-                            payload = {"text": ai_text}
-                            
-                            async with aiohttp.ClientSession() as http_session:
-                                async with http_session.post(tts_url, headers=headers, json=payload) as resp:
-                                    if resp.status == 200:
-                                        audio_data = await resp.read()
-                                        await websocket.send_bytes(audio_data)
-                                        print("🔊 [TTS] Audio sent to client")
-                                    else:
-                                        print(f"❌ [TTS] Error: {await resp.text()}")
-                except Exception as e:
-                    print(f"❌ [HANDLER] Error: {e}")
-                    traceback.print_exc()
-
-            async def handle_close(_):
-                print("🔌 [DEEPGRAM] Connection closed")
-
-            async def handle_error(error):
-                print(f"❌ [DEEPGRAM] Error: {error}")
-
-            # Register event handlers
-            from deepgram.core.events import EventType
-            dg_connection.on(EventType.OPEN, handle_open)
-            dg_connection.on(EventType.MESSAGE, handle_message)
-            dg_connection.on(EventType.CLOSE, handle_close)
-            dg_connection.on(EventType.ERROR, handle_error)
-
-            # Start listening
-            dg_connection.start_listening()
-            print("🎧 [DEEPGRAM] Listening started")
-
-            # Loop to receive audio from client and forward to Deepgram
+        async def handle_message(self, result, **kwargs):
             try:
-                while True:
-                    data = await websocket.receive_bytes()
-                    print(f"🎤 [AUDIO] Received {len(data)} bytes from client")
-                    # Send audio to Deepgram
-                    dg_connection.send(data)
-                        
-            except WebSocketDisconnect:
-                print("🔌 [CLIENT] Disconnected")
+                # In v3+, result is the transcript object
+                sentence = result.channel.alternatives[0].transcript
+                if not sentence or len(sentence) == 0:
+                    return
+                
+                if result.is_final:
+                    print(f"📝 [USER] Said: {sentence}")
+                    # 1. Save User Turn
+                    user_turn = LessonTurn(
+                        session_id=lesson_session.id,
+                        speaker="user",
+                        text=sentence
+                    )
+                    session.add(user_turn)
+                    session.commit()
+                    
+                    # 2. Send "User finished speaking" signal to frontend
+                    await websocket.send_json({"type": "transcript", "role": "user", "text": sentence})
+
+                    # 3. Call OpenAI
+                    messages = [
+                        {"role": "system", "content": SYSTEM_TUTOR_PROMPT},
+                        {"role": "system", "content": f"Student Name: {user_profile.name if user_profile else 'Student'}. Level: {user_profile.english_level if user_profile else 'A1'}."}
+                    ]
+                    
+                    # Add recent context
+                    recent_turns = session.exec(select(LessonTurn).where(LessonTurn.session_id == lesson_session.id).order_by(LessonTurn.created_at.desc()).limit(10)).all()
+                    for turn in reversed(recent_turns):
+                        messages.append({"role": turn.speaker, "content": turn.text})
+                    
+                    print("🤖 [OPENAI] Calling...")
+                    response = await openai_client.chat.completions.create(
+                        model=settings.default_model,
+                        messages=messages
+                    )
+                    ai_text = response.choices[0].message.content
+                    print(f"💬 [AI] Said: {ai_text}")
+                    
+                    # 4. Save Assistant Turn
+                    ai_turn = LessonTurn(
+                        session_id=lesson_session.id,
+                        speaker="assistant",
+                        text=ai_text
+                    )
+                    session.add(ai_turn)
+                    session.commit()
+
+                    # 5. Send Text to Frontend
+                    await websocket.send_json({"type": "transcript", "role": "assistant", "text": ai_text})
+
+                    # 6. TTS via Deepgram REST API
+                    tts_url = f"https://api.deepgram.com/v1/speak?model={settings.deepgram_voice_id}"
+                    headers = {
+                        "Authorization": f"Token {settings.deepgram_api_key}",
+                        "Content-Type": "application/json"
+                    }
+                    payload = {"text": ai_text}
+                    
+                    async with aiohttp.ClientSession() as http_session:
+                        async with http_session.post(tts_url, headers=headers, json=payload) as resp:
+                            if resp.status == 200:
+                                audio_data = await resp.read()
+                                await websocket.send_bytes(audio_data)
+                                print("🔊 [TTS] Audio sent to client")
+                            else:
+                                print(f"❌ [TTS] Error: {await resp.text()}")
             except Exception as e:
-                print(f"❌ [LOOP] Error: {e}")
+                print(f"❌ [HANDLER] Error: {e}")
                 traceback.print_exc()
-            finally:
-                # Connection will auto-close when exiting context manager
-                lesson_session.status = "completed"
-                lesson_session.ended_at = datetime.utcnow()
-                session.add(lesson_session)
-                session.commit()
-                print("✅ [SESSION] Completed")
+
+        async def handle_close(self, close, **kwargs):
+            print(f"🔌 [DEEPGRAM] Connection closed: {close}")
+
+        async def handle_error(self, error, **kwargs):
+            print(f"❌ [DEEPGRAM] Error: {error}")
+
+        # Register event handlers
+        # Try to import LiveTranscriptionEvents, fallback to strings if needed
+        try:
+            from deepgram import LiveTranscriptionEvents
+            dg_connection.on(LiveTranscriptionEvents.Open, handle_open)
+            dg_connection.on(LiveTranscriptionEvents.Transcript, handle_message)
+            dg_connection.on(LiveTranscriptionEvents.Close, handle_close)
+            dg_connection.on(LiveTranscriptionEvents.Error, handle_error)
+        except ImportError:
+            # Fallback for older/newer SDK versions where import path differs
+            # Using string literals which often work or generic 'on'
+            print("⚠️ [DEEPGRAM] LiveTranscriptionEvents not found, using generic strings")
+            dg_connection.on("open", handle_open)
+            dg_connection.on("Results", handle_message) # 'Results' or 'Transcript'?
+            dg_connection.on("close", handle_close)
+            dg_connection.on("error", handle_error)
+
+        # Start listening
+        options = {
+            "model": "nova-2",
+            "smart_format": True,
+            "interim_results": True,
+        }
+        
+        print(f"🔧 [DEEPGRAM] Starting connection with options: {options}")
+        if dg_connection.start(options) is False:
+            print("❌ [DEEPGRAM] Failed to start connection")
+            await websocket.close(code=1011, reason="Deepgram connection failed")
+            return
+
+        print("🎧 [DEEPGRAM] Listening started")
+
+        # Loop to receive audio from client and forward to Deepgram
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                # print(f"🎤 [AUDIO] Received {len(data)} bytes from client")
+                # Send audio to Deepgram
+                dg_connection.send(data)
+                    
+        except WebSocketDisconnect:
+            print("🔌 [CLIENT] Disconnected")
+        except Exception as e:
+            print(f"❌ [LOOP] Error: {e}")
+            traceback.print_exc()
+        finally:
+            # Close Deepgram connection
+            dg_connection.finish()
+            
+            lesson_session.status = "completed"
+            lesson_session.ended_at = datetime.utcnow()
+            session.add(lesson_session)
+            session.commit()
+            print("✅ [SESSION] Completed")
 
     except Exception as e:
         print(f"❌ [SETUP] Error: {e}")
