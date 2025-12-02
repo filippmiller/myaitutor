@@ -8,8 +8,9 @@ class AppSettings(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     openai_api_key: Optional[str] = None
     default_model: str = Field(default="gpt-4o-mini")
-    deepgram_api_key: Optional[str] = None
-    deepgram_voice_id: str = Field(default="aura-asteria-en")
+    # Deepgram fields removed
+    # deepgram_api_key: Optional[str] = None
+    # deepgram_voice_id: str = Field(default="aura-asteria-en")
 
 class LessonSession(SQLModel, table=True):
     __tablename__ = "lesson_sessions"

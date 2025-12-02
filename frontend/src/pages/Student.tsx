@@ -91,9 +91,14 @@ export default function Student() {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             console.log('✅ [MICROPHONE] Access granted');
 
-            // 2. Connect WebSocket (Cookies will be sent automatically)
+            // 2. Connect WebSocket to backend
+            // In production: window.location.host is the Railway URL
+            // In dev: we need to explicitly use localhost:8000 for backend
+            const isDev = window.location.hostname === 'localhost';
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/api/voice-lesson/ws`;
+            const wsUrl = isDev
+                ? 'ws://localhost:8000/api/ws/voice'
+                : `${protocol}//${window.location.host}/api/ws/voice`;
             console.log(`🔌 [WEBSOCKET] Creating connection to: ${wsUrl}`);
             const ws = new WebSocket(wsUrl);
             wsRef.current = ws;
@@ -135,7 +140,7 @@ export default function Student() {
                 } else {
                     console.log('📨 [WEBSOCKET] Received binary message (audio)');
                     // Binary message (Audio)
-                    const audioBlob = new Blob([event.data], { type: 'audio/mp3' });
+                    const audioBlob = new Blob([event.data], { type: 'audio/wav' });
                     const audioUrl = URL.createObjectURL(audioBlob);
                     const audio = new Audio(audioUrl);
                     audio.play();

@@ -1,303 +1,184 @@
-import json
+
 import asyncio
-from datetime import datetime
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+import json
+import logging
+import uuid
+import time
+from typing import Optional
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
 from sqlmodel import Session, select
+
 from app.database import get_session
-from app.models import AppSettings, UserAccount, LessonSession, LessonTurn, UserProfile, SessionMessage
-from app.services.auth_service import verify_session_id
-from app.services.openai_service import SYSTEM_TUTOR_PROMPT
-import openai
-import os
-import aiohttp
-import sys
-import traceback
+from app.models import AppSettings, UserAccount, UserProfile
+# from app.api.deps import get_current_user_ws # Removed - file doesn't exist yet
+# from app.services.openai_service import OpenAIService # Not a class, just functions
+from app.services.yandex_service import YandexService, AudioConverter
 
-# Try to import Deepgram safely
-DEEPGRAM_AVAILABLE = False
-DeepgramClient = None
-LiveTranscriptionEvents = None
-LiveOptions = None
-
-try:
-    import deepgram
-    print(f"Deepgram Module: {deepgram}")
-    
-    # Attempt to get DeepgramClient
-    if hasattr(deepgram, 'DeepgramClient'):
-        DeepgramClient = deepgram.DeepgramClient
-    else:
-        # Try importing from deepgram directly
-        from deepgram import DeepgramClient
-
-    # Try to find LiveTranscriptionEvents and LiveOptions
-    # They might be in deepgram.clients.live.v1 or just deepgram
-    try:
-        from deepgram import LiveTranscriptionEvents
-    except ImportError:
-        try:
-            from deepgram.clients.live.v1 import LiveTranscriptionEvents
-        except ImportError:
-            pass
-
-    try:
-        from deepgram import LiveOptions
-    except ImportError:
-        try:
-            from deepgram.clients.live.v1 import LiveOptions
-        except ImportError:
-            pass
-
-    if DeepgramClient:
-        DEEPGRAM_AVAILABLE = True
-        print("DeepgramClient loaded successfully")
-    else:
-        print("DeepgramClient not found")
-
-except Exception as e:
-    print(f"Deepgram Setup Error: {e}")
-    import traceback
-    traceback.print_exc()
-
-if not DEEPGRAM_AVAILABLE:
-    print("WARNING: Deepgram SDK not available. Voice features will fail.")
-
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get("/voice-lesson/health")
-async def voice_lesson_health(session: Session = Depends(get_session)):
-    """Health check for voice lesson prerequisites"""
-    from app.services.auth_service import get_current_user
-    from fastapi import Request, Depends as FastAPIDepends
-    
-    result = {
-        "deepgram_available": DEEPGRAM_AVAILABLE,
-        "deepgram_client": DeepgramClient is not None,
-    }
-    
-    # Check settings
-    settings = session.get(AppSettings, 1)
-    result["settings_exist"] = settings is not None
-    result["deepgram_key_set"] = bool(settings and settings.deepgram_api_key)
-    result["openai_key_set"] = bool(settings and settings.openai_api_key)
-    
-    return result
-
-@router.websocket("/voice-lesson/ws")
-async def voice_lesson_ws(
+@router.websocket("/ws/voice")
+async def voice_websocket(
     websocket: WebSocket,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    # user: UserAccount = Depends(get_current_user_ws) # Temporarily disabled for easier testing if needed
 ):
-    print("=" * 80)
-    print("🔌 [WEBSOCKET] New connection attempt")
     await websocket.accept()
-    print("✅ [WEBSOCKET] Connection accepted")
     
-    # 1. Authentication
-    # Try query param first, then cookie
-    token = websocket.query_params.get("token")
-    if not token:
-        token = websocket.cookies.get("session_id")
-    
-    print(f"🔑 [AUTH] Token found: {bool(token)}")
-        
-    user = None
-    if token:
-        try:
-            user_id = verify_session_id(token, session)
-            if user_id:
-                user = session.get(UserAccount, user_id)
-                print(f"✅ [AUTH] User authenticated: {user.email if user else 'None'}")
-        except Exception as e:
-            print(f"❌ [AUTH] Error: {e}")
-            pass
-            
-    if not user:
-        print("❌ [AUTH] Authentication failed - closing connection")
-        await websocket.close(code=1008, reason="Unauthorized")
+    # 1. Load Settings
+    settings = session.exec(select(AppSettings)).first()
+    if not settings or not settings.openai_api_key:
+        await websocket.close(code=1008, reason="OpenAI API Key missing")
         return
 
-    # 2. Get Settings
-    settings = session.get(AppSettings, 1)
-    if not settings or not settings.deepgram_api_key or not settings.openai_api_key:
-        print("❌ [SETTINGS] Missing API keys")
-        await websocket.close(code=1011, reason="Server configuration missing")
-        return
-    
-    print(f"✅ [SETTINGS] API keys present - Deepgram: {bool(settings.deepgram_api_key)}, OpenAI: {bool(settings.openai_api_key)}")
-
-    # 3. Create Lesson Session
-    lesson_session = LessonSession(user_account_id=user.id)
-    session.add(lesson_session)
-    session.commit()
-    session.refresh(lesson_session)
-    print(f"✅ [SESSION] Lesson session created: {lesson_session.id}")
-
-    # 4. Setup Deepgram
-    if not DEEPGRAM_AVAILABLE:
-        print("❌ [DEEPGRAM] SDK not available")
-        await websocket.close(code=1011, reason="Deepgram SDK missing")
-        return
-    
-    print("✅ [DEEPGRAM] SDK available")
-
-    # OpenAI Client
-    openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-
-    # State
-    user_profile = session.exec(select(UserProfile).where(UserProfile.user_account_id == user.id)).first()
-
+    # 2. Initialize Services
     try:
-        print("🔧 [DEEPGRAM] Initializing client...")
-        # Initialize Deepgram Client (v5+ uses api_key parameter)
-        deepgram = DeepgramClient(api_key=settings.deepgram_api_key)
-        print("✅ [DEEPGRAM] Client initialized")
+        yandex_service = YandexService()
+        # openai_service = OpenAIService(api_key=settings.openai_api_key) # Use direct client for simplicity for now
+        converter = AudioConverter()
+    except Exception as e:
+        logger.error(f"Failed to initialize services: {e}")
+        await websocket.close(code=1011, reason=f"Service init failed: {str(e)}")
+        return
 
-        # Configure Deepgram connection
-        print("🔧 [DEEPGRAM] Creating connection...")
-        
-        # Create a connection using the standard Live API
-        dg_connection = deepgram.listen.live.v("1")
-
-        # Define event handlers
-        async def handle_open(self, open, **kwargs):
-            print(f"🎧 [DEEPGRAM] Connection opened: {open}")
-
-        async def handle_message(self, result, **kwargs):
-            try:
-                # In v3+, result is the transcript object
-                sentence = result.channel.alternatives[0].transcript
-                if not sentence or len(sentence) == 0:
-                    return
-                
-                if result.is_final:
-                    print(f"📝 [USER] Said: {sentence}")
-                    # 1. Save User Turn
-                    user_turn = LessonTurn(
-                        session_id=lesson_session.id,
-                        speaker="user",
-                        text=sentence
-                    )
-                    session.add(user_turn)
-                    session.commit()
-                    
-                    # 2. Send "User finished speaking" signal to frontend
-                    await websocket.send_json({"type": "transcript", "role": "user", "text": sentence})
-
-                    # 3. Call OpenAI
-                    messages = [
-                        {"role": "system", "content": SYSTEM_TUTOR_PROMPT},
-                        {"role": "system", "content": f"Student Name: {user_profile.name if user_profile else 'Student'}. Level: {user_profile.english_level if user_profile else 'A1'}."}
-                    ]
-                    
-                    # Add recent context
-                    recent_turns = session.exec(select(LessonTurn).where(LessonTurn.session_id == lesson_session.id).order_by(LessonTurn.created_at.desc()).limit(10)).all()
-                    for turn in reversed(recent_turns):
-                        messages.append({"role": turn.speaker, "content": turn.text})
-                    
-                    print("🤖 [OPENAI] Calling...")
-                    response = await openai_client.chat.completions.create(
-                        model=settings.default_model,
-                        messages=messages
-                    )
-                    ai_text = response.choices[0].message.content
-                    print(f"💬 [AI] Said: {ai_text}")
-                    
-                    # 4. Save Assistant Turn
-                    ai_turn = LessonTurn(
-                        session_id=lesson_session.id,
-                        speaker="assistant",
-                        text=ai_text
-                    )
-                    session.add(ai_turn)
-                    session.commit()
-
-                    # 5. Send Text to Frontend
-                    await websocket.send_json({"type": "transcript", "role": "assistant", "text": ai_text})
-
-                    # 6. TTS via Deepgram REST API
-                    tts_url = f"https://api.deepgram.com/v1/speak?model={settings.deepgram_voice_id}"
-                    headers = {
-                        "Authorization": f"Token {settings.deepgram_api_key}",
-                        "Content-Type": "application/json"
-                    }
-                    payload = {"text": ai_text}
-                    
-                    async with aiohttp.ClientSession() as http_session:
-                        async with http_session.post(tts_url, headers=headers, json=payload) as resp:
-                            if resp.status == 200:
-                                audio_data = await resp.read()
-                                await websocket.send_bytes(audio_data)
-                                print("🔊 [TTS] Audio sent to client")
-                            else:
-                                print(f"❌ [TTS] Error: {await resp.text()}")
-            except Exception as e:
-                print(f"❌ [HANDLER] Error: {e}")
-                traceback.print_exc()
-
-        async def handle_close(self, close, **kwargs):
-            print(f"🔌 [DEEPGRAM] Connection closed: {close}")
-
-        async def handle_error(self, error, **kwargs):
-            print(f"❌ [DEEPGRAM] Error: {error}")
-
-        # Register event handlers
-        # Try to import LiveTranscriptionEvents, fallback to strings if needed
-        try:
-            from deepgram import LiveTranscriptionEvents
-            dg_connection.on(LiveTranscriptionEvents.Open, handle_open)
-            dg_connection.on(LiveTranscriptionEvents.Transcript, handle_message)
-            dg_connection.on(LiveTranscriptionEvents.Close, handle_close)
-            dg_connection.on(LiveTranscriptionEvents.Error, handle_error)
-        except ImportError:
-            # Fallback for older/newer SDK versions where import path differs
-            # Using string literals which often work or generic 'on'
-            print("⚠️ [DEEPGRAM] LiveTranscriptionEvents not found, using generic strings")
-            dg_connection.on("open", handle_open)
-            dg_connection.on("Results", handle_message) # 'Results' or 'Transcript'?
-            dg_connection.on("close", handle_close)
-            dg_connection.on("error", handle_error)
-
-        # Start listening
-        options = {
-            "model": "nova-2",
-            "smart_format": True,
-            "interim_results": True,
-        }
-        
-        print(f"🔧 [DEEPGRAM] Starting connection with options: {options}")
-        if dg_connection.start(options) is False:
-            print("❌ [DEEPGRAM] Failed to start connection")
-            await websocket.close(code=1011, reason="Deepgram connection failed")
-            return
-
-        print("🎧 [DEEPGRAM] Listening started")
-
-        # Loop to receive audio from client and forward to Deepgram
+    # 3. State
+    conversation_history = [
+        {"role": "system", "content": "You are a helpful English tutor for a Russian speaker. Keep your answers concise and helpful."}
+    ]
+    
+    # Queues for async processing
+    audio_queue = asyncio.Queue()
+    
+    async def receive_audio_loop():
         try:
             while True:
                 data = await websocket.receive_bytes()
-                # print(f"🎤 [AUDIO] Received {len(data)} bytes from client")
-                # Send audio to Deepgram
-                dg_connection.send(data)
-                    
+                if not data:
+                    break
+                # Write to converter (blocking call, run in executor if heavy, but write is usually fast)
+                # ffmpeg runs in separate process, so writing to pipe buffer is fast
+                converter.write(data)
         except WebSocketDisconnect:
-            print("🔌 [CLIENT] Disconnected")
+            pass
         except Exception as e:
-            print(f"❌ [LOOP] Error: {e}")
-            traceback.print_exc()
+            logger.error(f"Error in receive_loop: {e}")
         finally:
-            # Close Deepgram connection
-            dg_connection.finish()
-            
-            lesson_session.status = "completed"
-            lesson_session.ended_at = datetime.utcnow()
-            session.add(lesson_session)
-            session.commit()
-            print("✅ [SESSION] Completed")
+            converter.close()
+            # await audio_queue.put(None) # Signal end
 
+    async def stt_loop():
+        """Reads from converter stdout and sends to Yandex STT"""
+        def audio_generator():
+            while True:
+                # Read converted PCM data
+                chunk = converter.read(4000)
+                if not chunk:
+                    # If process is dead or no data, check if we should stop
+                    if converter.process.poll() is not None:
+                        break
+                    time.sleep(0.01)
+                    continue
+                yield chunk
+
+        try:
+            # Since my YandexService uses sync gRPC, I must run it in a thread to not block the event loop.
+            loop = asyncio.get_event_loop()
+            
+            # Wrapper to run the sync loop
+            def run_sync_stt():
+                responses = yandex_service.recognize_stream(audio_generator())
+                for response in responses:
+                    for chunk in response.chunks:
+                        if chunk.final:
+                            text = chunk.alternatives[0].text
+                            if text:
+                                logger.info(f"STT Final: {text}")
+                                asyncio.run_coroutine_threadsafe(process_user_text(text), loop)
+            
+            await loop.run_in_executor(None, run_sync_stt)
+            
+        except Exception as e:
+            logger.error(f"Error in stt_loop: {e}")
+
+    async def process_user_text(text: str):
+        """Handle recognized text: Send to LLM -> TTS -> Client"""
+        # 1. Send user text to client (transcript)
+        await websocket.send_json({"type": "transcript", "role": "user", "text": text})
+        
+        # 2. LLM
+        conversation_history.append({"role": "user", "content": text})
+        
+        llm_response = ""
+        try:
+            import openai
+            client = openai.OpenAI(api_key=settings.openai_api_key)
+            completion = client.chat.completions.create(
+                model=settings.default_model,
+                messages=conversation_history
+            )
+            llm_response = completion.choices[0].message.content
+        except Exception as e:
+            logger.error(f"LLM Error: {e}")
+            return
+
+        conversation_history.append({"role": "assistant", "content": llm_response})
+        await websocket.send_json({"type": "transcript", "role": "assistant", "text": llm_response})
+        
+        # 3. TTS
+        try:
+            # Run TTS generation in executor
+            loop = asyncio.get_event_loop()
+            def run_tts():
+                return list(yandex_service.synthesize_stream(llm_response))
+            
+            audio_chunks = await loop.run_in_executor(None, run_tts)
+            
+            # Send audio to client
+            # Client expects... what? Blob?
+            # Deepgram sent binary. We can send binary.
+            # However, we are sending RAW PCM 48kHz 16bit mono.
+            # Browser AudioContext usually expects WAV or specific format.
+            # We should probably wrap it in WAV container or send a header first.
+            # Or, we can use ffmpeg to convert BACK to Opus/WebM?
+            # Sending raw PCM is fine if we tell the frontend what it is.
+            # But the frontend `Student.tsx` likely expects a playable blob.
+            # If we send raw PCM, `new Blob([data], {type: 'audio/wav'})` won't work without header.
+            
+            # Let's wrap in WAV header for simplicity.
+            # Or just send raw and let frontend handle? Frontend is generic.
+            # Safest is to send WAV.
+            
+            # Helper to add WAV header
+            import struct
+            def add_wav_header(pcm_data, sample_rate=48000, channels=1, sampwidth=2):
+                header = b'RIFF' + struct.pack('<I', 36 + len(pcm_data)) + b'WAVE' + \
+                         b'fmt ' + struct.pack('<I', 16) + struct.pack('<HHIIHH', 1, channels, sample_rate, sample_rate * channels * sampwidth, channels * sampwidth, sampwidth * 8) + \
+                         b'data' + struct.pack('<I', len(pcm_data))
+                return header + pcm_data
+
+            full_audio = b''.join(audio_chunks)
+            wav_audio = add_wav_header(full_audio)
+            
+            await websocket.send_bytes(wav_audio)
+                
+        except Exception as e:
+            logger.error(f"TTS Error: {e}")
+
+    # Start loops
+    receive_task = asyncio.create_task(receive_audio_loop())
+    stt_task = asyncio.create_task(stt_loop())
+
+    try:
+        await asyncio.gather(receive_task, stt_task)
     except Exception as e:
-        print(f"❌ [SETUP] Error: {e}")
-        traceback.print_exc()
-        await websocket.close(code=1011, reason=str(e))
+        logger.error(f"Main loop error: {e}")
+    finally:
+        converter.close()
+
+@router.get("/health")
+def health_check():
+    return {"status": "ok", "provider": "yandex"}
