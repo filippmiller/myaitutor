@@ -11,6 +11,18 @@ interface UserProfile {
     pains: string;
 }
 
+interface TranscriptMessage {
+    type: 'transcript';
+    role: 'user' | 'assistant';
+    text: string;
+}
+
+interface SystemMessage {
+    type: 'system';
+    level: 'info' | 'warning' | 'error';
+    message: string;
+}
+
 export default function Student() {
     const [profile, setProfile] = useState<UserProfile>({
         name: '',
@@ -21,6 +33,7 @@ export default function Student() {
     const [isRecording, setIsRecording] = useState(false);
     const [connectionStatus, setConnectionStatus] = useState('Disconnected');
     const [transcript, setTranscript] = useState<Array<{ role: string, text: string }>>([]);
+    const [sttLanguage, setSttLanguage] = useState<'ru-RU' | 'en-US'>('ru-RU');
 
     const [progress, setProgress] = useState<ProgressResponse | null>(null);
     const [activeTab, setActiveTab] = useState<'chat' | 'progress'>('chat');
@@ -31,6 +44,7 @@ export default function Student() {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const chatEndRef = useRef<HTMLDivElement | null>(null);
+    const audioContextRef = useRef<AudioContext | null>(null);
 
     const handleAuthError = async (res: Response) => {
         if (res.status === 401) {
@@ -91,9 +105,12 @@ export default function Student() {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             console.log('✅ [MICROPHONE] Access granted');
 
-            // 2. Connect WebSocket to backend
-            // In production: window.location.host is the Railway URL
-            // In dev: we need to explicitly use localhost:8000 for backend
+            // 2. Initialize Audio Context
+            if (!audioContextRef.current) {
+                audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+            }
+
+            // 3. Connect WebSocket
             const isDev = window.location.hostname === 'localhost';
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = isDev
@@ -112,7 +129,11 @@ export default function Student() {
                 setIsRecording(true);
                 console.log('🎙️ [STATE] Connection status: Connected, Recording started');
 
-                // 3. Start MediaRecorder
+                // Send config and start event
+                ws.send(JSON.stringify({ type: 'config', stt_language: sttLanguage }));
+                ws.send(JSON.stringify({ type: 'system_event', event: 'lesson_started' }));
+
+                // 4. Start MediaRecorder
                 const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
                 mediaRecorderRef.current = mediaRecorder;
                 console.log('🎬 [RECORDER] MediaRecorder created');
@@ -129,22 +150,28 @@ export default function Student() {
             };
 
             ws.onmessage = async (event) => {
-                if (typeof event.data === 'string') {
-                    console.log('📨 [WEBSOCKET] Received text message:', event.data);
-                    // Text message (Transcript)
-                    const msg = JSON.parse(event.data);
-                    if (msg.type === 'transcript') {
-                        console.log(`💬 [TRANSCRIPT] ${msg.role}: ${msg.text}`);
-                        setTranscript(prev => [...prev, { role: msg.role, text: msg.text }]);
-                    }
+                if (event.data instanceof Blob) {
+                    // Binary message = Audio
+                    console.log(`🔊 [AUDIO] Received ${event.data.size} bytes`);
+                    playAudio(event.data);
                 } else {
-                    console.log('📨 [WEBSOCKET] Received binary message (audio)');
-                    // Binary message (Audio)
-                    const audioBlob = new Blob([event.data], { type: 'audio/wav' });
-                    const audioUrl = URL.createObjectURL(audioBlob);
-                    const audio = new Audio(audioUrl);
-                    audio.play();
-                    console.log('🔊 [AUDIO] Playing AI response');
+                    // Text message = JSON
+                    try {
+                        const msg = JSON.parse(event.data);
+                        console.log('📨 [WEBSOCKET] Received:', msg);
+
+                        if (msg.type === 'transcript') {
+                            console.log(`💬 [TRANSCRIPT] ${msg.role}: ${msg.text}`);
+                            setTranscript(prev => [...prev, { role: msg.role, text: msg.text }]);
+                        } else if (msg.type === 'system') {
+                            console.log(`[SYSTEM] ${msg.level}: ${msg.message}`);
+                            if (msg.level === 'error') {
+                                alert(`Error: ${msg.message}`);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('❌ [WEBSOCKET] Failed to parse message:', event.data);
+                    }
                 }
             };
 
@@ -182,6 +209,21 @@ export default function Student() {
         stopMediaRecorder();
         setIsRecording(false);
         setConnectionStatus('Disconnected');
+    };
+
+    const playAudio = async (blob: Blob) => {
+        if (!audioContextRef.current) return;
+
+        try {
+            const arrayBuffer = await blob.arrayBuffer();
+            const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
+            const source = audioContextRef.current.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContextRef.current.destination);
+            source.start(0);
+        } catch (e) {
+            console.error('❌ [AUDIO] Playback failed:', e);
+        }
     };
 
     return (
@@ -240,6 +282,19 @@ export default function Student() {
 
                     <div className="card">
                         <h2>Voice Lesson</h2>
+
+                        <div style={{ marginBottom: '15px' }}>
+                            <label style={{ marginRight: '10px' }}>Language:</label>
+                            <select
+                                value={sttLanguage}
+                                onChange={(e) => setSttLanguage(e.target.value as 'ru-RU' | 'en-US')}
+                                disabled={isRecording}
+                                style={{ padding: '5px' }}
+                            >
+                                <option value="ru-RU">Russian (ru-RU)</option>
+                                <option value="en-US">English (en-US)</option>
+                            </select>
+                        </div>
 
                         {!isRecording ? (
                             <button

@@ -32,10 +32,7 @@ async def echo_websocket(websocket: WebSocket):
         pass
 
 @router.websocket("/ws/voice")
-async def voice_websocket(
-    websocket: WebSocket,
-    # session: Session = Depends(get_session), # Remove dependency to avoid pre-handler failures
-):
+async def voice_websocket(websocket: WebSocket):
     await websocket.accept()
     logger.info(f"WebSocket connection accepted from {websocket.client}")
     
@@ -43,7 +40,6 @@ async def voice_websocket(
     from app.database import engine
     session = Session(engine)
     
-    # Define variables outside try to ensure finally works
     converter = None
     
     try:
@@ -52,8 +48,8 @@ async def voice_websocket(
             settings = session.exec(select(AppSettings)).first()
             if not settings or not settings.openai_api_key:
                 logger.error("OpenAI API Key missing in settings")
-                await websocket.close(code=1008, reason="OpenAI API Key missing")
-                return
+                await websocket.send_json({"type": "system", "level": "error", "message": "OpenAI API Key missing. Please configure it in settings."})
+                # Don't close immediately, let user see error
         except Exception as e:
             logger.error(f"Database error loading settings: {e}")
             await websocket.close(code=1011, reason="Database error")
@@ -61,26 +57,17 @@ async def voice_websocket(
 
         # 2. Initialize Services
         try:
-            # Check for ffmpeg first
             import shutil
             if not shutil.which("ffmpeg"):
-                logger.error("ffmpeg not found in system path")
-                await websocket.close(code=1011, reason="Server configuration error: ffmpeg missing")
+                logger.error("ffmpeg not found")
+                await websocket.close(code=1011, reason="ffmpeg missing")
                 return
 
-            logger.info("Initializing YandexService...")
             yandex_service = YandexService()
-            logger.info("YandexService initialized")
-            
             converter = AudioConverter()
-            logger.info("AudioConverter initialized")
             
-        except ValueError as e:
-            logger.error(f"Configuration error: {e}")
-            await websocket.close(code=1011, reason=f"Configuration error: {str(e)}")
-            return
         except Exception as e:
-            logger.error(f"Failed to initialize services: {e}", exc_info=True)
+            logger.error(f"Failed to initialize services: {e}")
             await websocket.close(code=1011, reason=f"Service init failed: {str(e)}")
             return
 
@@ -88,38 +75,128 @@ async def voice_websocket(
         conversation_history = [
             {"role": "system", "content": "You are a helpful English tutor for a Russian speaker. Keep your answers concise and helpful."}
         ]
+        stt_language = "ru-RU" # Default
         
-        # Queues for async processing
-        audio_queue = asyncio.Queue()
-        
-        async def receive_audio_loop():
+        # Helpers
+        async def synthesize_and_send(text: str):
+            try:
+                logger.info(f"Starting TTS for: {text[:30]}...")
+                loop = asyncio.get_event_loop()
+                def run_tts():
+                    return list(yandex_service.synthesize_stream(text))
+                
+                audio_chunks = await loop.run_in_executor(None, run_tts)
+                if not audio_chunks:
+                    return
+
+                # WAV Header helper
+                import struct
+                def add_wav_header(pcm_data, sample_rate=48000, channels=1, sampwidth=2):
+                    header = b'RIFF' + struct.pack('<I', 36 + len(pcm_data)) + b'WAVE' + \
+                             b'fmt ' + struct.pack('<I', 16) + struct.pack('<HHIIHH', 1, channels, sample_rate, sample_rate * channels * sampwidth, channels * sampwidth, sampwidth * 8) + \
+                             b'data' + struct.pack('<I', len(pcm_data))
+                    return header + pcm_data
+
+                full_audio = b''.join(audio_chunks)
+                wav_audio = add_wav_header(full_audio)
+                await websocket.send_bytes(wav_audio)
+            except Exception as e:
+                logger.error(f"TTS Error: {e}")
+                await websocket.send_json({"type": "system", "level": "error", "message": "TTS Error"})
+
+        async def generate_greeting():
+            try:
+                logger.info("Generating greeting...")
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=settings.openai_api_key)
+                
+                system_prompt = (
+                    "You are an English tutor speaking to a student named Filipp. "
+                    "Generate a friendly, short greeting in Russian that invites him to practice English. "
+                    "Vary your wording every time. Do not be repetitive."
+                )
+                
+                completion = await client.chat.completions.create(
+                    model=settings.default_model,
+                    messages=[{"role": "system", "content": system_prompt}]
+                )
+                greeting = completion.choices[0].message.content
+                
+                # Send transcript
+                await websocket.send_json({"type": "transcript", "role": "assistant", "text": greeting})
+                
+                # Add to history
+                conversation_history.append({"role": "assistant", "content": greeting})
+                
+                # Speak
+                await synthesize_and_send(greeting)
+                
+            except Exception as e:
+                logger.error(f"Greeting Error: {e}")
+                await websocket.send_json({"type": "system", "level": "error", "message": "Failed to generate greeting (OpenAI Error)."})
+
+        async def process_user_text(text: str):
+            # 1. Send transcript
+            await websocket.send_json({"type": "transcript", "role": "user", "text": text})
+            
+            # 2. LLM
+            conversation_history.append({"role": "user", "content": text})
+            
+            llm_response = ""
+            try:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=settings.openai_api_key)
+                completion = await client.chat.completions.create(
+                    model=settings.default_model,
+                    messages=conversation_history
+                )
+                llm_response = completion.choices[0].message.content
+            except Exception as e:
+                logger.error(f"LLM Error: {e}")
+                await websocket.send_json({"type": "system", "level": "error", "message": "Brain connection failed (OpenAI Error)."})
+                return
+
+            conversation_history.append({"role": "assistant", "content": llm_response})
+            await websocket.send_json({"type": "transcript", "role": "assistant", "text": llm_response})
+            
+            # 3. TTS
+            await synthesize_and_send(llm_response)
+
+        # Loops
+        async def receive_loop():
+            nonlocal stt_language
             try:
                 while True:
-                    data = await websocket.receive_bytes()
-                    if not data:
-                        break
-                    # Write to converter
-                    if converter:
-                        converter.write(data)
+                    message = await websocket.receive()
+                    if "bytes" in message:
+                        data = message["bytes"]
+                        if converter:
+                            converter.write(data)
+                    elif "text" in message:
+                        try:
+                            msg = json.loads(message["text"])
+                            if msg.get("type") == "config":
+                                stt_language = msg.get("stt_language", "ru-RU")
+                                logger.info(f"STT Language set to: {stt_language}")
+                            elif msg.get("type") == "system_event" and msg.get("event") == "lesson_started":
+                                await generate_greeting()
+                        except json.JSONDecodeError:
+                            pass
             except WebSocketDisconnect:
                 pass
             except Exception as e:
                 logger.error(f"Error in receive_loop: {e}")
             finally:
-                # Signal EOF to converter so STT loop can finish naturally
                 if converter:
                     converter.close_stdin()
 
         async def stt_loop():
-            """Reads from converter stdout and sends to Yandex STT"""
             def audio_generator():
                 while True:
                     if not converter:
                         break
-                    # Read converted PCM data
                     chunk = converter.read(4000)
                     if not chunk:
-                        # If process is dead or no data, check if we should stop
                         if converter.process.poll() is not None:
                             break
                         time.sleep(0.01)
@@ -127,13 +204,11 @@ async def voice_websocket(
                     yield chunk
 
             try:
-                # Since my YandexService uses sync gRPC, I must run it in a thread to not block the event loop.
                 loop = asyncio.get_event_loop()
-                
-                # Wrapper to run the sync loop
                 def run_sync_stt():
                     try:
-                        responses = yandex_service.recognize_stream(audio_generator())
+                        # Use current stt_language
+                        responses = yandex_service.recognize_stream(audio_generator(), language_code=stt_language)
                         for response in responses:
                             for chunk in response.chunks:
                                 if chunk.final:
@@ -145,67 +220,11 @@ async def voice_websocket(
                         logger.error(f"Yandex STT Error: {e}")
                 
                 await loop.run_in_executor(None, run_sync_stt)
-                
             except Exception as e:
                 logger.error(f"Error in stt_loop: {e}")
 
-        async def process_user_text(text: str):
-            """Handle recognized text: Send to LLM -> TTS -> Client"""
-            # 1. Send user text to client (transcript)
-            await websocket.send_json({"type": "transcript", "role": "user", "text": text})
-            
-            # 2. LLM
-            conversation_history.append({"role": "user", "content": text})
-            
-            llm_response = ""
-            try:
-                from openai import AsyncOpenAI
-                logger.info("Sending request to OpenAI...")
-                client = AsyncOpenAI(api_key=settings.openai_api_key)
-                completion = await client.chat.completions.create(
-                    model=settings.default_model,
-                    messages=conversation_history
-                )
-                llm_response = completion.choices[0].message.content
-                logger.info(f"OpenAI Response: {llm_response[:50]}...")
-            except Exception as e:
-                logger.error(f"LLM Error: {e}")
-                await websocket.send_json({"type": "transcript", "role": "assistant", "text": "Sorry, I'm having trouble connecting to my brain (OpenAI Error). Please check the API Key."})
-                return
-
-            conversation_history.append({"role": "assistant", "content": llm_response})
-            await websocket.send_json({"type": "transcript", "role": "assistant", "text": llm_response})
-            
-            # 3. TTS
-            try:
-                logger.info("Starting TTS generation...")
-                # Run TTS generation in executor
-                loop = asyncio.get_event_loop()
-                def run_tts():
-                    return list(yandex_service.synthesize_stream(llm_response))
-                
-                audio_chunks = await loop.run_in_executor(None, run_tts)
-                logger.info(f"TTS generated {len(audio_chunks)} chunks")
-                
-                # Helper to add WAV header
-                import struct
-                def add_wav_header(pcm_data, sample_rate=48000, channels=1, sampwidth=2):
-                    header = b'RIFF' + struct.pack('<I', 36 + len(pcm_data)) + b'WAVE' + \
-                             b'fmt ' + struct.pack('<I', 16) + struct.pack('<HHIIHH', 1, channels, sample_rate, sample_rate * channels * sampwidth, channels * sampwidth, sampwidth * 8) + \
-                             b'data' + struct.pack('<I', len(pcm_data))
-                    return header + pcm_data
-
-                full_audio = b''.join(audio_chunks)
-                wav_audio = add_wav_header(full_audio)
-                
-                logger.info(f"Sending {len(wav_audio)} bytes of audio to client")
-                await websocket.send_bytes(wav_audio)
-                    
-            except Exception as e:
-                logger.error(f"TTS Error: {e}")
-
         # Start loops
-        receive_task = asyncio.create_task(receive_audio_loop())
+        receive_task = asyncio.create_task(receive_loop())
         stt_task = asyncio.create_task(stt_loop())
 
         await asyncio.gather(receive_task, stt_task)

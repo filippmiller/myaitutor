@@ -57,7 +57,7 @@ class YandexService:
             if response.audio_chunk.data:
                 yield response.audio_chunk.data
 
-    def recognize_stream(self, audio_generator):
+    def recognize_stream(self, audio_generator, language_code='ru-RU'):
         """
         audio_generator: iterator yielding bytes (PCM 48k, 1ch, 16bit)
         """
@@ -65,7 +65,7 @@ class YandexService:
             # Config message
             config = stt_service_pb2.RecognitionConfig(
                 specification=stt_service_pb2.RecognitionSpec(
-                    language_code='ru-RU', # Target language
+                    language_code=language_code, # Target language
                     profanity_filter=True,
                     model='general',
                     partial_results=True,
