@@ -45,11 +45,14 @@ async def voice_websocket(websocket: WebSocket):
     try:
         # 1. Load Settings
         try:
-            settings = session.exec(select(AppSettings)).first()
+            settings = session.get(AppSettings, 1)
             if not settings or not settings.openai_api_key:
                 logger.error("OpenAI API Key missing in settings")
                 await websocket.send_json({"type": "system", "level": "error", "message": "OpenAI API Key missing. Please configure it in settings."})
                 # Don't close immediately, let user see error
+            else:
+                masked_key = settings.openai_api_key[:8] + "*" * 10 if settings.openai_api_key else "None"
+                logger.info(f"Loaded OpenAI API Key: {masked_key}")
         except Exception as e:
             logger.error(f"Database error loading settings: {e}")
             await websocket.close(code=1011, reason="Database error")

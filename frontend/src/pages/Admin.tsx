@@ -3,8 +3,7 @@ import { useState, useEffect } from 'react';
 export default function Admin() {
     const [apiKey, setApiKey] = useState('');
     const [model, setModel] = useState('gpt-4o-mini');
-    const [deepgramKey, setDeepgramKey] = useState('');
-    const [voiceId, setVoiceId] = useState('aura-asteria-en');
+
     const [msg, setMsg] = useState('');
     const [testResult, setTestResult] = useState('');
 
@@ -14,8 +13,6 @@ export default function Admin() {
             .then(data => {
                 if (data.openai_api_key) setApiKey(data.openai_api_key);
                 if (data.default_model) setModel(data.default_model);
-                if (data.deepgram_api_key) setDeepgramKey(data.deepgram_api_key);
-                if (data.deepgram_voice_id) setVoiceId(data.deepgram_voice_id);
             });
     }, []);
 
@@ -25,9 +22,7 @@ export default function Admin() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 openai_api_key: apiKey,
-                default_model: model,
-                deepgram_api_key: deepgramKey,
-                deepgram_voice_id: voiceId
+                default_model: model
             })
         });
         if (res.ok) setMsg('Saved!');
@@ -42,17 +37,6 @@ export default function Admin() {
             setTestResult(`OpenAI: ${data.status} - ${data.message}`);
         } catch (e) {
             setTestResult('OpenAI Test Failed');
-        }
-    };
-
-    const testDeepgram = async () => {
-        setTestResult('Testing Deepgram...');
-        try {
-            const res = await fetch('/api/admin/test-deepgram', { method: 'POST' });
-            const data = await res.json();
-            setTestResult(`Deepgram: ${data.status} - ${data.message}`);
-        } catch (e) {
-            setTestResult('Deepgram Test Failed');
         }
     };
 
@@ -81,31 +65,6 @@ export default function Admin() {
                     </select>
                 </label>
                 <button onClick={testOpenAI} style={{ marginRight: '10px' }}>Test OpenAI</button>
-            </div>
-
-            <div style={{ marginBottom: '20px', borderTop: '1px solid #ccc', paddingTop: '20px' }}>
-                <h3>Deepgram</h3>
-                <label style={{ display: 'block', marginBottom: '10px' }}>
-                    API Key:
-                    <input
-                        type="password"
-                        value={deepgramKey}
-                        onChange={e => setDeepgramKey(e.target.value)}
-                        placeholder="Token..."
-                        style={{ marginLeft: '10px', width: '300px' }}
-                    />
-                </label>
-                <label style={{ display: 'block', marginBottom: '10px' }}>
-                    Voice ID:
-                    <input
-                        type="text"
-                        value={voiceId}
-                        onChange={e => setVoiceId(e.target.value)}
-                        placeholder="aura-asteria-en"
-                        style={{ marginLeft: '10px' }}
-                    />
-                </label>
-                <button onClick={testDeepgram}>Test Deepgram</button>
             </div>
 
             <div style={{ marginTop: '20px', borderTop: '1px solid #ccc', paddingTop: '20px' }}>
