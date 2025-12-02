@@ -106,8 +106,9 @@ async def voice_websocket(
             except Exception as e:
                 logger.error(f"Error in receive_loop: {e}")
             finally:
+                # Signal EOF to converter so STT loop can finish naturally
                 if converter:
-                    converter.close()
+                    converter.close_stdin()
 
         async def stt_loop():
             """Reads from converter stdout and sends to Yandex STT"""
@@ -131,14 +132,17 @@ async def voice_websocket(
                 
                 # Wrapper to run the sync loop
                 def run_sync_stt():
-                    responses = yandex_service.recognize_stream(audio_generator())
-                    for response in responses:
-                        for chunk in response.chunks:
-                            if chunk.final:
-                                text = chunk.alternatives[0].text
-                                if text:
-                                    logger.info(f"STT Final: {text}")
-                                    asyncio.run_coroutine_threadsafe(process_user_text(text), loop)
+                    try:
+                        responses = yandex_service.recognize_stream(audio_generator())
+                        for response in responses:
+                            for chunk in response.chunks:
+                                if chunk.final:
+                                    text = chunk.alternatives[0].text
+                                    if text:
+                                        logger.info(f"STT Final: {text}")
+                                        asyncio.run_coroutine_threadsafe(process_user_text(text), loop)
+                    except Exception as e:
+                        logger.error(f"Yandex STT Error: {e}")
                 
                 await loop.run_in_executor(None, run_sync_stt)
                 

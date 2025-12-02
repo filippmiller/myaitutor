@@ -114,19 +114,40 @@ class AudioConverter:
             try:
                 self.process.stdin.write(data)
                 self.process.stdin.flush()
-            except BrokenPipeError:
+            except (BrokenPipeError, ValueError):
                 pass
 
     def read(self, chunk_size=4096):
         if self.process.stdout:
-            return self.process.stdout.read(chunk_size)
+            try:
+                return self.process.stdout.read(chunk_size)
+            except ValueError: # I/O operation on closed file
+                return b''
         return b''
 
-    def close(self):
+    def close_stdin(self):
+        """Signal EOF to ffmpeg so it can finish processing and close stdout naturally."""
         if self.process.stdin:
-            self.process.stdin.close()
+            try:
+                self.process.stdin.close()
+            except (BrokenPipeError, ValueError):
+                pass
+
+    def close(self):
+        """Force close everything."""
+        if self.process.stdin:
+            try:
+                self.process.stdin.close()
+            except (BrokenPipeError, ValueError):
+                pass
         if self.process.stdout:
-            self.process.stdout.close()
+            try:
+                self.process.stdout.close()
+            except (BrokenPipeError, ValueError):
+                pass
         self.process.terminate()
-        self.process.wait()
+        try:
+            self.process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
 
