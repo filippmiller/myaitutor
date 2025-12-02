@@ -46,12 +46,15 @@ async def voice_websocket(websocket: WebSocket):
         # 1. Load Settings
         try:
             settings = session.get(AppSettings, 1)
-            if not settings or not settings.openai_api_key:
-                logger.error("OpenAI API Key missing in settings")
+            # Use DB setting or fallback to env var
+            api_key = settings.openai_api_key if settings and settings.openai_api_key else os.getenv("OPENAI_API_KEY")
+            
+            if not api_key:
+                logger.error("OpenAI API Key missing in settings and environment")
                 await websocket.send_json({"type": "system", "level": "error", "message": "OpenAI API Key missing. Please configure it in settings."})
                 # Don't close immediately, let user see error
             else:
-                masked_key = settings.openai_api_key[:8] + "*" * 10 if settings.openai_api_key else "None"
+                masked_key = api_key[:8] + "*" * 10 if api_key else "None"
                 logger.info(f"Loaded OpenAI API Key: {masked_key}")
         except Exception as e:
             logger.error(f"Database error loading settings: {e}")
@@ -122,7 +125,7 @@ async def voice_websocket(websocket: WebSocket):
             try:
                 logger.info("Generating greeting...")
                 from openai import AsyncOpenAI
-                client = AsyncOpenAI(api_key=settings.openai_api_key)
+                client = AsyncOpenAI(api_key=api_key)
                 
                 system_prompt = (
                     "You are an English tutor speaking to a student named Filipp. "
@@ -159,7 +162,7 @@ async def voice_websocket(websocket: WebSocket):
             llm_response = ""
             try:
                 from openai import AsyncOpenAI
-                client = AsyncOpenAI(api_key=settings.openai_api_key)
+                client = AsyncOpenAI(api_key=api_key)
                 completion = await client.chat.completions.create(
                     model=settings.default_model,
                     messages=conversation_history

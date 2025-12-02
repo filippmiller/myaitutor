@@ -49,10 +49,13 @@ async def get_tokens_status(session: Session = Depends(get_session)):
     """
     settings = session.get(AppSettings, 1)
     
+    # Resolve OpenAI key (DB or Env)
+    openai_key = settings.openai_api_key if settings and settings.openai_api_key else os.getenv("OPENAI_API_KEY")
+    
     # OpenAI status
     openai_status = ProviderStatus(
-        has_key=bool(settings and settings.openai_api_key),
-        masked_key=mask_api_key(settings.openai_api_key if settings else None),
+        has_key=bool(openai_key),
+        masked_key=mask_api_key(openai_key),
         status=settings.openai_key_status if settings and hasattr(settings, 'openai_key_status') else "unknown",
         last_checked_at=settings.openai_key_last_checked_at.isoformat() if settings and hasattr(settings, 'openai_key_last_checked_at') and settings.openai_key_last_checked_at else None,
         last_error=settings.openai_key_last_error if settings and hasattr(settings, 'openai_key_last_error') else None
@@ -91,8 +94,11 @@ async def test_token(request: TestTokenRequest, session: Session = Depends(get_s
     now = datetime.utcnow()
     
     if request.provider == "openai":
+        # Resolve OpenAI key (DB or Env)
+        openai_key = settings.openai_api_key if settings and settings.openai_api_key else os.getenv("OPENAI_API_KEY")
+
         # Check if key exists
-        if not settings.openai_api_key:
+        if not openai_key:
             result = TokenHealthResult(
                 status="error",
                 message="OpenAI API key not configured"
@@ -101,7 +107,7 @@ async def test_token(request: TestTokenRequest, session: Session = Depends(get_s
             # Test the key
             logger.info("Testing OpenAI API key...")
             result = await test_openai_key(
-                api_key=settings.openai_api_key,
+                api_key=openai_key,
                 model=settings.default_model
             )
         
