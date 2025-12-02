@@ -57,17 +57,28 @@ async def voice_websocket(websocket: WebSocket):
 
         # 2. Initialize Services
         try:
+            # Check for ffmpeg first
             import shutil
-            if not shutil.which("ffmpeg"):
-                logger.error("ffmpeg not found")
-                await websocket.close(code=1011, reason="ffmpeg missing")
+            ffmpeg_path = shutil.which("ffmpeg")
+            if not ffmpeg_path:
+                logger.error("ffmpeg not found in system path")
+                await websocket.close(code=1011, reason="Server configuration error: ffmpeg missing")
                 return
+            logger.info(f"ffmpeg found at: {ffmpeg_path}")
 
+            logger.info("Initializing YandexService...")
             yandex_service = YandexService()
-            converter = AudioConverter()
+            logger.info("YandexService initialized")
             
+            converter = AudioConverter()
+            logger.info("AudioConverter initialized")
+            
+        except ValueError as e:
+            logger.error(f"Configuration error: {e}")
+            await websocket.close(code=1011, reason=f"Configuration error: {str(e)}")
+            return
         except Exception as e:
-            logger.error(f"Failed to initialize services: {e}")
+            logger.error(f"Failed to initialize services: {e}", exc_info=True)
             await websocket.close(code=1011, reason=f"Service init failed: {str(e)}")
             return
 
@@ -192,22 +203,25 @@ async def voice_websocket(websocket: WebSocket):
 
         async def stt_loop():
             def audio_generator():
+                logger.info("Starting audio_generator")
                 while True:
                     if not converter:
                         break
                     chunk = converter.read(4000)
                     if not chunk:
                         if converter.process.poll() is not None:
+                            logger.info("Converter process finished")
                             break
                         time.sleep(0.01)
                         continue
                     yield chunk
+                logger.info("audio_generator finished")
 
             try:
                 loop = asyncio.get_event_loop()
                 def run_sync_stt():
                     try:
-                        # Use current stt_language
+                        logger.info(f"Starting recognize_stream with lang={stt_language}")
                         responses = yandex_service.recognize_stream(audio_generator(), language_code=stt_language)
                         for response in responses:
                             for chunk in response.chunks:
@@ -216,8 +230,11 @@ async def voice_websocket(websocket: WebSocket):
                                     if text:
                                         logger.info(f"STT Final: {text}")
                                         asyncio.run_coroutine_threadsafe(process_user_text(text), loop)
+                        logger.info("recognize_stream finished successfully")
                     except Exception as e:
                         logger.error(f"Yandex STT Error: {e}")
+                    except BaseException as e:
+                        logger.critical(f"Yandex STT CRITICAL Error: {e}", exc_info=True)
                 
                 await loop.run_in_executor(None, run_sync_stt)
             except Exception as e:
@@ -229,12 +246,18 @@ async def voice_websocket(websocket: WebSocket):
 
         await asyncio.gather(receive_task, stt_task)
         
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
     except Exception as e:
-        logger.error(f"Main loop error: {e}")
+        logger.error(f"Main loop error: {e}", exc_info=True)
+    except BaseException as e:
+        logger.critical(f"Main loop CRITICAL error: {e}", exc_info=True)
     finally:
+        logger.info("Cleaning up resources...")
         if converter:
             converter.close()
         session.close()
+        logger.info("Cleanup complete")
 
 @router.get("/health")
 def health_check():

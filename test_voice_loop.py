@@ -16,6 +16,13 @@ async def test_voice_loop():
         await websocket.send(json.dumps({"type": "system_event", "event": "lesson_started"}))
         print("Sent lesson_started")
 
+        # Send some silence
+        silence = b'\x00' * 4000
+        for _ in range(5):
+            await websocket.send(silence)
+            await asyncio.sleep(0.1)
+        print("Sent silence")
+
         # 3. Listen for messages
         try:
             while True:
@@ -23,8 +30,12 @@ async def test_voice_loop():
                 if isinstance(message, str):
                     data = json.loads(message)
                     print(f"Received JSON: {data}")
+                    if data.get("type") == "system" and data.get("level") == "error":
+                         print("Error received, exiting...")
+                         break
                     if data.get("type") == "transcript" and data.get("role") == "assistant":
                         print("Assistant spoke!")
+                        break
                 else:
                     print(f"Received Audio: {len(message)} bytes")
         except websockets.exceptions.ConnectionClosed as e:
