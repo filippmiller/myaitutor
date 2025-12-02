@@ -159,15 +159,18 @@ async def voice_websocket(
             
             llm_response = ""
             try:
-                import openai
-                client = openai.OpenAI(api_key=settings.openai_api_key)
-                completion = client.chat.completions.create(
+                from openai import AsyncOpenAI
+                logger.info("Sending request to OpenAI...")
+                client = AsyncOpenAI(api_key=settings.openai_api_key)
+                completion = await client.chat.completions.create(
                     model=settings.default_model,
                     messages=conversation_history
                 )
                 llm_response = completion.choices[0].message.content
+                logger.info(f"OpenAI Response: {llm_response[:50]}...")
             except Exception as e:
                 logger.error(f"LLM Error: {e}")
+                await websocket.send_json({"type": "transcript", "role": "assistant", "text": "Sorry, I'm having trouble connecting to my brain (OpenAI Error). Please check the API Key."})
                 return
 
             conversation_history.append({"role": "assistant", "content": llm_response})
@@ -175,12 +178,14 @@ async def voice_websocket(
             
             # 3. TTS
             try:
+                logger.info("Starting TTS generation...")
                 # Run TTS generation in executor
                 loop = asyncio.get_event_loop()
                 def run_tts():
                     return list(yandex_service.synthesize_stream(llm_response))
                 
                 audio_chunks = await loop.run_in_executor(None, run_tts)
+                logger.info(f"TTS generated {len(audio_chunks)} chunks")
                 
                 # Helper to add WAV header
                 import struct
@@ -193,6 +198,7 @@ async def voice_websocket(
                 full_audio = b''.join(audio_chunks)
                 wav_audio = add_wav_header(full_audio)
                 
+                logger.info(f"Sending {len(wav_audio)} bytes of audio to client")
                 await websocket.send_bytes(wav_audio)
                     
             except Exception as e:
