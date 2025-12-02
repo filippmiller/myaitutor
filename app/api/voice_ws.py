@@ -176,13 +176,15 @@ async def voice_websocket(websocket: WebSocket):
         # Loops
         async def receive_loop():
             nonlocal stt_language
+            loop = asyncio.get_running_loop()
             try:
                 while True:
                     message = await websocket.receive()
                     if "bytes" in message:
                         data = message["bytes"]
                         if converter:
-                            converter.write(data)
+                            # Run blocking write in executor to avoid freezing main loop
+                            await loop.run_in_executor(None, converter.write, data)
                     elif "text" in message:
                         try:
                             msg = json.loads(message["text"])
@@ -194,9 +196,9 @@ async def voice_websocket(websocket: WebSocket):
                         except json.JSONDecodeError:
                             pass
             except WebSocketDisconnect:
-                pass
+                logger.info("WebSocket disconnected")
             except Exception as e:
-                logger.error(f"Error in receive_loop: {e}")
+                logger.error(f"Error in receive_loop: {e}", exc_info=True)
             finally:
                 if converter:
                     converter.close_stdin()
