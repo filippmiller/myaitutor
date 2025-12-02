@@ -11,17 +11,7 @@ interface UserProfile {
     pains: string;
 }
 
-interface TranscriptMessage {
-    type: 'transcript';
-    role: 'user' | 'assistant';
-    text: string;
-}
 
-interface SystemMessage {
-    type: 'system';
-    level: 'info' | 'warning' | 'error';
-    message: string;
-}
 
 export default function Student() {
     const [profile, setProfile] = useState<UserProfile>({
