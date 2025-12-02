@@ -28,20 +28,42 @@ async def voice_websocket(
     # user: UserAccount = Depends(get_current_user_ws) # Temporarily disabled for easier testing if needed
 ):
     await websocket.accept()
+    logger.info(f"WebSocket connection accepted from {websocket.client}")
     
     # 1. Load Settings
-    settings = session.exec(select(AppSettings)).first()
-    if not settings or not settings.openai_api_key:
-        await websocket.close(code=1008, reason="OpenAI API Key missing")
+    try:
+        settings = session.exec(select(AppSettings)).first()
+        if not settings or not settings.openai_api_key:
+            logger.error("OpenAI API Key missing in settings")
+            await websocket.close(code=1008, reason="OpenAI API Key missing")
+            return
+    except Exception as e:
+        logger.error(f"Database error loading settings: {e}")
+        await websocket.close(code=1011, reason="Database error")
         return
 
     # 2. Initialize Services
     try:
+        # Check for ffmpeg first
+        import shutil
+        if not shutil.which("ffmpeg"):
+            logger.error("ffmpeg not found in system path")
+            await websocket.close(code=1011, reason="Server configuration error: ffmpeg missing")
+            return
+
+        logger.info("Initializing YandexService...")
         yandex_service = YandexService()
-        # openai_service = OpenAIService(api_key=settings.openai_api_key) # Use direct client for simplicity for now
+        logger.info("YandexService initialized")
+        
         converter = AudioConverter()
+        logger.info("AudioConverter initialized")
+        
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        await websocket.close(code=1011, reason=f"Configuration error: {str(e)}")
+        return
     except Exception as e:
-        logger.error(f"Failed to initialize services: {e}")
+        logger.error(f"Failed to initialize services: {e}", exc_info=True)
         await websocket.close(code=1011, reason=f"Service init failed: {str(e)}")
         return
 

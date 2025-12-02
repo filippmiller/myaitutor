@@ -89,6 +89,10 @@ class AudioConverter:
     Converts WebM stream to PCM 48kHz 16bit mono using ffmpeg.
     """
     def __init__(self):
+        import shutil
+        if not shutil.which("ffmpeg"):
+            raise FileNotFoundError("ffmpeg not found. Please install ffmpeg.")
+
         self.process = subprocess.Popen(
             [
                 "ffmpeg",
