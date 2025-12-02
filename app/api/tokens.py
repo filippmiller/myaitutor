@@ -38,6 +38,7 @@ class TestTokenResponse(BaseModel):
     status: str
     message: str
     last_checked_at: str
+    debug_info: dict | None = None  # Full request/response debug info
 
 @router.get("/tokens/status", response_model=TokensStatusResponse)
 async def get_tokens_status(session: Session = Depends(get_session)):
@@ -119,7 +120,8 @@ async def test_token(request: TestTokenRequest, session: Session = Depends(get_s
             provider="openai",
             status=result.status,
             message=result.message,
-            last_checked_at=now.isoformat()
+            last_checked_at=now.isoformat(),
+            debug_info=result.debug_info
         )
     
     elif request.provider == "yandex_speechkit":
@@ -150,7 +152,8 @@ async def test_token(request: TestTokenRequest, session: Session = Depends(get_s
             provider="yandex_speechkit",
             status=result.status,
             message=result.message,
-            last_checked_at=now.isoformat()
+            last_checked_at=now.isoformat(),
+            debug_info=result.debug_info
         )
     
     else:

@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
+import DebugModal from './DebugModal';
 
 interface ProviderStatus {
     has_key: boolean;
     masked_key: string;
-    status: string; // ok, invalid, quota, error, unknown
+    status: string;
     last_checked_at: string | null;
     last_error: string | null;
 }
@@ -17,6 +18,8 @@ export default function TokensPanel() {
     const [tokensStatus, setTokensStatus] = useState<TokensStatus | null>(null);
     const [testing, setTesting] = useState<Record<string, boolean>>({});
     const [error, setError] = useState('');
+    const [debugModalOpen, setDebugModalOpen] = useState(false);
+    const [debugData, setDebugData] = useState<any>(null);
 
     const loadStatus = async () => {
         try {
@@ -43,10 +46,20 @@ export default function TokensPanel() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ provider })
             });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            await loadStatus(); // Reload status after test
-        } catch (e) {
-            setError(`Failed to test ${provider} token`);
+            if (!res.ok) {
+                const errorText = await res.text();
+                throw new Error(`HTTP ${res.status}: ${errorText}`);
+            }
+            const result = await res.json();
+
+            // Show debug modal with full details
+            setDebugData(result);
+            setDebugModalOpen(true);
+
+            // Reload status
+            await loadStatus();
+        } catch (e: any) {
+            setError(`Failed to test ${provider} token: ${e.message}`);
             console.error(`Token test error for ${provider}:`, e);
         } finally {
             setTesting(prev => ({ ...prev, [provider]: false }));
@@ -55,28 +68,28 @@ export default function TokensPanel() {
 
     const getStatusColor = (status: string): string => {
         switch (status) {
-            case 'ok': return '#4CAF50'; // green
-            case 'invalid': return '#f44336'; // red
-            case 'error': return '#f44336'; // red
-            case 'quota': return '#FF9800'; // orange
-            case 'unknown': return '#9E9E9E'; // gray
-            default: return '#9E9E9E';
+            case 'ok': return '#10b981'; // emerald-500  
+            case 'invalid': return '#ef4444'; // red-500
+            case 'error': return '#ef4444';
+            case 'quota': return '#f59e0b'; // amber-500
+            case 'unknown': return '#6b7280'; // gray-500
+            default: return '#6b7280';
         }
     };
 
-    const getStatusLabel = (status: string): string => {
+    const getStatusIcon = (status: string): string => {
         switch (status) {
-            case 'ok': return '✓ OK';
-            case 'invalid': return '✗ INVALID';
-            case 'error': return '✗ ERROR';
-            case 'quota': return '⚠ QUOTA';
-            case 'unknown': return '? UNKNOWN';
-            default: return status.toUpperCase();
+            case 'ok': return '✓';
+            case 'invalid': return '✗';
+            case 'error': return '✗';
+            case 'quota': return '⚠';
+            case 'unknown': return '?';
+            default: return '?';
         }
     };
 
     const formatLastChecked = (timestamp: string | null): string => {
-        if (!timestamp) return '—';
+        if (!timestamp) return 'Never';
         const date = new Date(timestamp);
         const now = new Date();
         const diff = now.getTime() - date.getTime();
@@ -91,7 +104,11 @@ export default function TokensPanel() {
     };
 
     if (!tokensStatus) {
-        return <div>Loading token status...</div>;
+        return (
+            <div style={{ padding: '20px', textAlign: 'center' }}>
+                <div>Loading token status...</div>
+            </div>
+        );
     }
 
     const providers = [
@@ -100,89 +117,149 @@ export default function TokensPanel() {
     ];
 
     return (
-        <div style={{ marginTop: '30px', borderTop: '2px solid #ddd', paddingTop: '20px' }}>
-            <h3>🔑 AI Tokens Health Panel</h3>
-            <p style={{ fontSize: '14px', color: '#666', marginBottom: '20px' }}>
-                Monitor and test your AI provider API keys
-            </p>
-
-            {error && (
-                <div style={{ padding: '10px', background: '#ffebee', color: '#c62828', borderRadius: '4px', marginBottom: '15px' }}>
-                    {error}
+        <>
+            <div style={{ marginTop: '40px', paddingTop: '30px', borderTop: '2px solid #374151' }}>
+                <div style={{ marginBottom: '24px' }}>
+                    <h3 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        🔑 AI Provider Tokens
+                    </h3>
+                    <p style={{ fontSize: '14px', color: '#9ca3af', margin: 0 }}>
+                        Monitor API key health and test connections
+                    </p>
                 </div>
+
+                {error && (
+                    <div style={{
+                        padding: '12px 16px',
+                        background: 'linear-gradient(135deg, #fecaca 0%, #fca5a5 100%)',
+                        color: '#7f1d1d',
+                        borderRadius: '8px',
+                        marginBottom: '20px',
+                        border: '1px solid #f87171',
+                        fontSize: '14px'
+                    }}>
+                        <strong>⚠ Error:</strong> {error}
+                    </div>
+                )}
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {providers.map(({ id, name, data }) => {
+                        const statusColor = getStatusColor(data.status);
+                        const statusIcon = getStatusIcon(data.status);
+
+                        return (
+                            <div
+                                key={id}
+                                style={{
+                                    background: 'linear-gradient(135deg, #374151 0%, #1f2937 100%)',
+                                    border: '1px solid #4b5563',
+                                    borderRadius: '12px',
+                                    padding: '20px',
+                                    transition: 'all 0.2s ease',
+                                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.3)'
+                                }}
+                            >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <h4 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: '#f3f4f6' }}>
+                                            {name}
+                                        </h4>
+
+                                        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px', fontSize: '13px' }}>
+                                            <div style={{ color: '#9ca3af' }}>API Key:</div>
+                                            <div style={{ fontFamily: 'monospace', color: data.has_key ? '#d1d5db' : '#6b7280' }}>
+                                                {data.has_key ? data.masked_key : 'Not configured'}
+                                            </div>
+
+                                            <div style={{ color: '#9ca3af' }}>Status:</div>
+                                            <div>
+                                                <span style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '6px',
+                                                    padding: '4px 12px',
+                                                    borderRadius: '6px',
+                                                    fontSize: '12px',
+                                                    fontWeight: 'bold',
+                                                    color: 'white',
+                                                    backgroundColor: statusColor
+                                                }}>
+                                                    <span>{statusIcon}</span>
+                                                    <span>{data.status.toUpperCase()}</span>
+                                                </span>
+                                            </div>
+
+                                            <div style={{ color: '#9ca3af' }}>Last Tested:</div>
+                                            <div style={{ color: '#d1d5db' }}>
+                                                {formatLastChecked(data.last_checked_at)}
+                                            </div>
+
+                                            {data.last_error && (
+                                                <>
+                                                    <div style={{ color: '#9ca3af' }}>Last Error:</div>
+                                                    <div style={{ color: '#fca5a5', fontSize: '12px' }}>
+                                                        {data.last_error}
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <button
+                                        onClick={() => testToken(id)}
+                                        disabled={testing[id] || !data.has_key}
+                                        style={{
+                                            padding: '10px 20px',
+                                            fontSize: '14px',
+                                            fontWeight: '600',
+                                            background: testing[id] ? '#374151' : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '8px',
+                                            cursor: testing[id] || !data.has_key ? 'not-allowed' : 'pointer',
+                                            transition: 'all 0.2s ease',
+                                            opacity: testing[id] || !data.has_key ? 0.5 : 1,
+                                            boxShadow: testing[id] || !data.has_key ? 'none' : '0 2px 4px rgba(59, 130, 246, 0.4)',
+                                            minWidth: '140px'
+                                        }}
+                                        onMouseOver={(e) => {
+                                            if (!testing[id] && data.has_key) {
+                                                e.currentTarget.style.transform = 'translateY(-1px)';
+                                                e.currentTarget.style.boxShadow = '0 4px 8px rgba(59, 130, 246, 0.6)';
+                                            }
+                                        }}
+                                        onMouseOut={(e) => {
+                                            e.currentTarget.style.transform = 'translateY(0)';
+                                            e.currentTarget.style.boxShadow = testing[id] || !data.has_key ? 'none' : '0 2px 4px rgba(59, 130, 246, 0.4)';
+                                        }}
+                                    >
+                                        {testing[id] ? '⏳ Testing...' : '🔬 Test Connection'}
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <div style={{
+                    marginTop: '20px',
+                    padding: '12px 16px',
+                    background: '#1f2937',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    color: '#9ca3af',
+                    border: '1px solid #374151'
+                }}>
+                    <strong style={{ color: '#d1d5db' }}>💡 Tip:</strong> After updating an API key above, use <strong>Test Connection</strong> to verify it works. The test will show you the full HTTP request/response for debugging.
+                </div>
+            </div>
+
+            {debugModalOpen && debugData && (
+                <DebugModal
+                    data={debugData}
+                    onClose={() => setDebugModalOpen(false)}
+                />
             )}
-
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-                <thead>
-                    <tr style={{ borderBottom: '2px solid #ddd' }}>
-                        <th style={{ textAlign: 'left', padding: '10px' }}>Provider</th>
-                        <th style={{ textAlign: 'left', padding: '10px' }}>Key</th>
-                        <th style={{ textAlign: 'left', padding: '10px' }}>Status</th>
-                        <th style={{ textAlign: 'left', padding: '10px' }}>Last Checked</th>
-                        <th style={{ textAlign: 'left', padding: '10px' }}>Error</th>
-                        <th style={{ textAlign: 'center', padding: '10px' }}>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {providers.map(({ id, name, data }) => (
-                        <tr key={id} style={{ borderBottom: '1px solid #eee' }}>
-                            <td style={{ padding: '12px', fontWeight: '500' }}>{name}</td>
-                            <td style={{ padding: '12px', fontFamily: 'monospace', fontSize: '12px' }}>
-                                {data.has_key ? data.masked_key : <span style={{ color: '#999' }}>Not set</span>}
-                            </td>
-                            <td style={{ padding: '12px' }}>
-                                <span style={{
-                                    display: 'inline-block',
-                                    padding: '4px 8px',
-                                    borderRadius: '4px',
-                                    fontSize: '12px',
-                                    fontWeight: 'bold',
-                                    color: 'white',
-                                    backgroundColor: getStatusColor(data.status)
-                                }}>
-                                    {getStatusLabel(data.status)}
-                                </span>
-                            </td>
-                            <td style={{ padding: '12px', color: '#666' }}>
-                                {formatLastChecked(data.last_checked_at)}
-                            </td>
-                            <td style={{ padding: '12px', fontSize: '12px', color: '#d32f2f', maxWidth: '200px' }}>
-                                {data.last_error || '—'}
-                            </td>
-                            <td style={{ padding: '12px', textAlign: 'center' }}>
-                                <button
-                                    onClick={() => testToken(id)}
-                                    disabled={testing[id] || !data.has_key}
-                                    style={{
-                                        padding: '6px 12px',
-                                        fontSize: '12px',
-                                        backgroundColor: testing[id] ? '#ccc' : '#2196F3',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        cursor: testing[id] || !data.has_key ? 'not-allowed' : 'pointer'
-                                    }}
-                                >
-                                    {testing[id] ? '⏳ Testing...' : '🔬 Check Token'}
-                                </button>
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-
-            <div style={{ marginTop: '15px', padding: '10px', background: '#f5f5f5', borderRadius: '4px', fontSize: '12px', color: '#666' }}>
-                <strong>Status Legend:</strong>
-                <span style={{ marginLeft: '10px', color: '#4CAF50' }}>● OK</span> = Token is valid and working |
-                <span style={{ marginLeft: '5px', color: '#f44336' }}>● INVALID</span> = Wrong key / Unauthorized |
-                <span style={{ marginLeft: '5px', color: '#FF9800' }}>● QUOTA</span> = Rate limit / Quota exceeded |
-                <span style={{ marginLeft: '5px', color: '#f44336' }}>● ERROR</span> = Other error |
-                <span style={{ marginLeft: '5px', color: '#9E9E9E' }}>● UNKNOWN</span> = Not tested yet
-            </div>
-
-            <div style={{ marginTop: '10px', fontSize: '12px', color: '#999', fontStyle: 'italic' }}>
-                💡 Tip: After updating an API key above, press "Check Token" to verify it works.
-            </div>
-        </div>
+        </>
     );
 }
