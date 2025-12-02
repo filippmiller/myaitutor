@@ -16,3 +16,4 @@ aiohttp
 yandexcloud
 grpcio
 grpcio-tools
+websockets
