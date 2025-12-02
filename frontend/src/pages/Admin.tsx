@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import TokensPanel from '../components/TokensPanel';
 
 export default function Admin() {
     const [apiKey, setApiKey] = useState('');
@@ -77,6 +78,8 @@ export default function Admin() {
                     <strong>Test Result:</strong> {testResult}
                 </div>
             )}
+
+            <TokensPanel />
         </div>
     );
 }
