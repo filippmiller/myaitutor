@@ -156,7 +156,7 @@ class AuthSession(SQLModel, table=True):
 # --- Billing Models ---
 
 from decimal import Decimal
-from sqlalchemy import Column, Numeric
+from sqlalchemy import Column, Numeric, JSON
 
 class BillingPackage(SQLModel, table=True):
     __tablename__ = "billing_packages"
@@ -194,7 +194,7 @@ class UsageSession(SQLModel, table=True):
     billed_minutes: int
     billed_amount_rub: Decimal = Field(sa_column=Column(Numeric(10, 2)))
     billing_status: str # pending, billed, free, failed
-    tariff_snapshot: Optional[str] = None # JSON string
+    tariff_snapshot: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class Referral(SQLModel, table=True):

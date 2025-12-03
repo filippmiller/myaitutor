@@ -44,7 +44,7 @@ class UsageService:
             billed_minutes=billed_minutes,
             billed_amount_rub=billed_amount_rub,
             billing_status="pending",
-            tariff_snapshot=json.dumps(tariff_snapshot)
+            tariff_snapshot=tariff_snapshot
         )
         self.session.add(usage)
         self.session.commit()

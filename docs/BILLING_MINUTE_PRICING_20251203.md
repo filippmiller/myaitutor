@@ -133,3 +133,11 @@ AIlingva uses a minute-based billing system.
 - **Schema**: Added `tariff_snapshot` to `usage_sessions`. Added `minutes_balance` to `userprofile` (fixed missing column).
 - **Referrals**: Confirmed flow A->B with dual rewards.
 - **Verification**: Added comprehensive verification script `verify_billing_phase2.py`.
+
+## Verification Log (2025-12-03)
+- **Scenario A (Registration)**: Verified. New user gets 60 min trial.
+- **Scenario B (Deposits)**: Verified. Deposit 1000 RUB -> 222 mins (10% discount).
+- **Scenario C (Usage)**: Verified. 8 min session -> -8 mins. `tariff_snapshot` stored as JSONB.
+- **Scenario D (Gift)**: Verified. Admin gift +10 mins works.
+- **Scenario E (Referrals)**: Verified. Referrer +60, Referred +60.
+- **Schema**: `usage_sessions.tariff_snapshot` migrated to `JSONB`. `userprofile.minutes_balance` confirmed active.
