@@ -187,7 +187,7 @@ This is the student's FIRST message in this session. You MUST:
                 try:
                     action = json.loads(rule.action)
                     if "say" in action:
-                        prompt_parts.append(f"  Use this greeting: \\"{action['say']}\\"")
+                        prompt_parts.append(f"  Use this greeting: \"{action['say']}\"")
                 except:
                     pass
     
@@ -206,7 +206,7 @@ This is the student's FIRST message in this session. You MUST:
                 try:
                     action = json.loads(rule.action)
                     if "say" in action:
-                        prompt_parts.append(f"  Action: Say \\"{action['say']}\\"")
+                        prompt_parts.append(f"  Action: Say \"{action['say']}\"")
                 except:
                     pass
    
