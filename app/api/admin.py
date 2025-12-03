@@ -326,23 +326,27 @@ def save_user_voice(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
         
-    profile.preferred_tts_engine = data.preferred_tts_engine
-    profile.preferred_stt_engine = data.preferred_stt_engine
-    profile.preferred_voice_id = data.preferred_voice_id
-    
-    # Sync with JSON preferences for backward compatibility/frontend ease if needed
-    import json
     try:
-        prefs = json.loads(profile.preferences)
-    except:
-        prefs = {}
-    prefs["preferred_voice"] = data.preferred_voice_id # Legacy field
-    profile.preferences = json.dumps(prefs)
-    
-    session.add(profile)
-    session.commit()
-    session.refresh(profile)
-    
-    return profile
+        profile.preferred_tts_engine = data.preferred_tts_engine
+        profile.preferred_stt_engine = data.preferred_stt_engine
+        profile.preferred_voice_id = data.preferred_voice_id
+        
+        # Sync with JSON preferences for backward compatibility/frontend ease if needed
+        import json
+        try:
+            prefs = json.loads(profile.preferences)
+        except:
+            prefs = {}
+        prefs["preferred_voice"] = data.preferred_voice_id # Legacy field
+        profile.preferences = json.dumps(prefs)
+        
+        session.add(profile)
+        session.commit()
+        session.refresh(profile)
+        
+        return profile
+    except Exception as e:
+        print(f"Error saving voice settings: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 

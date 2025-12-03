@@ -109,11 +109,12 @@ export default function AdminUsers() {
                 alert('Voice settings saved!');
                 fetchUserDetails(selectedUser.account.id);
             } else {
-                alert('Error saving voice settings');
+                const err = await res.json();
+                alert(`Error saving voice settings: ${err.detail || res.statusText}`);
             }
         } catch (e) {
             console.error(e);
-            alert('Error saving voice settings');
+            alert(`Error saving voice settings: ${e}`);
         }
     };
 
