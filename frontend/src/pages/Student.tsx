@@ -167,7 +167,17 @@ export default function Student() {
 
             ws.onclose = (event) => {
                 console.log(`❌ [WEBSOCKET] Connection CLOSED - Code: ${event.code}, Reason: ${event.reason || 'No reason provided'}, Clean: ${event.wasClean}`);
-                setConnectionStatus('Disconnected');
+
+                let statusMsg = 'Disconnected';
+                if (event.code !== 1000 && event.code !== 1001 && event.code !== 1005) {
+                    statusMsg = `Error: ${event.reason || 'Connection failed'}`;
+                    // Also show alert for visibility
+                    if (event.reason) {
+                        alert(`Connection closed: ${event.reason}`);
+                    }
+                }
+
+                setConnectionStatus(statusMsg);
                 setIsRecording(false);
                 stopMediaRecorder();
                 console.log('🛑 [STATE] Connection status: Disconnected, Recording stopped');

@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 import time
+import os
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
@@ -72,6 +73,10 @@ async def voice_websocket(websocket: WebSocket):
             ffmpeg_path = shutil.which("ffmpeg")
             if not ffmpeg_path:
                 logger.error("ffmpeg not found in system path")
+                try:
+                    await websocket.send_json({"type": "system", "level": "error", "message": "Server configuration error: ffmpeg missing"})
+                except:
+                    pass
                 await websocket.close(code=1011, reason="Server configuration error: ffmpeg missing")
                 return
             logger.info(f"ffmpeg found at: {ffmpeg_path}")
@@ -85,10 +90,18 @@ async def voice_websocket(websocket: WebSocket):
             
         except ValueError as e:
             logger.error(f"Configuration error: {e}")
+            try:
+                await websocket.send_json({"type": "system", "level": "error", "message": f"Configuration error: {str(e)}"})
+            except:
+                pass
             await websocket.close(code=1011, reason=f"Configuration error: {str(e)}")
             return
         except Exception as e:
             logger.error(f"Failed to initialize services: {e}", exc_info=True)
+            try:
+                await websocket.send_json({"type": "system", "level": "error", "message": f"Service init failed: {str(e)}"})
+            except:
+                pass
             await websocket.close(code=1011, reason=f"Service init failed: {str(e)}")
             return
 
