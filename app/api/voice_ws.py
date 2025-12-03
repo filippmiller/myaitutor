@@ -107,7 +107,15 @@ async def voice_websocket(websocket: WebSocket):
 
         # 3. State
         conversation_history = [
-            {"role": "system", "content": "You are a helpful English tutor for a Russian speaker. Keep your answers concise and helpful."}
+            {"role": "system", "content": (
+                "You are a helpful English tutor for a Russian speaker. "
+                "The user might speak a mix of English and Russian. "
+                "Always respond in English to help them practice, unless they explicitly ask for an explanation in Russian. "
+                "Note: The user's speech is transcribed by a Russian STT model, so English words may appear transliterated into Cyrillic "
+                "(e.g. 'Хелло' for 'Hello', 'май нейм из' for 'my name is'). "
+                "Please interpret these phonetically as English where appropriate. "
+                "Keep your answers concise and helpful."
+            )}
         ]
         stt_language = "ru-RU" # Default
         
@@ -170,31 +178,79 @@ async def voice_websocket(websocket: WebSocket):
                 await websocket.send_json({"type": "system", "level": "error", "message": "Failed to generate greeting (OpenAI Error)."})
 
         async def process_user_text(text: str):
-            # 1. Send transcript
+            # 1. Send transcript (User)
             await websocket.send_json({"type": "transcript", "role": "user", "text": text})
             
-            # 2. LLM
+            # 2. LLM Streaming & TTS
             conversation_history.append({"role": "user", "content": text})
             
-            llm_response = ""
+            full_response_text = ""
+            current_sentence = ""
+            
             try:
                 from openai import AsyncOpenAI
                 client = AsyncOpenAI(api_key=api_key)
-                completion = await client.chat.completions.create(
+                
+                stream = await client.chat.completions.create(
                     model=settings.default_model,
-                    messages=conversation_history
+                    messages=conversation_history,
+                    stream=True
                 )
-                llm_response = completion.choices[0].message.content
+                
+                import re
+                # Split by . ? ! but keep the delimiter. 
+                # Simple regex lookbehind or just accumulation.
+                
+                async for chunk in stream:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        full_response_text += content
+                        current_sentence += content
+                        
+                        # Check for sentence endings
+                        if re.search(r'[.!?]\s', current_sentence):
+                            # We have at least one sentence
+                            parts = re.split(r'([.!?])', current_sentence)
+                            
+                            # Reconstruct sentences (part + delimiter)
+                            # parts will be ['Sentence', '.', ' Next partial']
+                            
+                            to_process = ""
+                            remainder = ""
+                            
+                            # Iterate pairs
+                            for i in range(0, len(parts) - 1, 2):
+                                if i+1 < len(parts):
+                                    sentence = parts[i] + parts[i+1]
+                                    to_process += sentence
+                            
+                            if len(parts) % 2 != 0:
+                                remainder = parts[-1]
+                                
+                            if to_process.strip():
+                                # Send partial transcript update (optional, but good for UI)
+                                # For now, we just send audio. The UI appends transcript at the end? 
+                                # The current UI appends on "transcript" message. 
+                                # We can send multiple transcript chunks or one big one at the end.
+                                # Let's send the text chunk so the user sees what's being spoken.
+                                await websocket.send_json({"type": "transcript", "role": "assistant", "text": to_process})
+                                
+                                # Generate Audio
+                                await synthesize_and_send(to_process)
+                                
+                            current_sentence = remainder
+
+                # Process any remaining text
+                if current_sentence.strip():
+                    await websocket.send_json({"type": "transcript", "role": "assistant", "text": current_sentence})
+                    await synthesize_and_send(current_sentence)
+
             except Exception as e:
                 logger.error(f"LLM Error: {e}")
                 await websocket.send_json({"type": "system", "level": "error", "message": "Brain connection failed (OpenAI Error)."})
                 return
 
-            conversation_history.append({"role": "assistant", "content": llm_response})
-            await websocket.send_json({"type": "transcript", "role": "assistant", "text": llm_response})
-            
-            # 3. TTS
-            await synthesize_and_send(llm_response)
+            conversation_history.append({"role": "assistant", "content": full_response_text})
 
         # Loops
         async def receive_loop():

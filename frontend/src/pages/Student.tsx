@@ -164,7 +164,18 @@ export default function Student() {
                                 stopAudioPlayback();
                             }
 
-                            setTranscript(prev => [...prev, { role: msg.role, text: msg.text }]);
+                            setTranscript(prev => {
+                                const last = prev[prev.length - 1];
+                                // If the last message was from the assistant and this one is too, merge them
+                                if (last && last.role === 'assistant' && msg.role === 'assistant') {
+                                    const newPrev = [...prev];
+                                    // Add a space if needed
+                                    const separator = last.text.endsWith(' ') ? '' : ' ';
+                                    newPrev[prev.length - 1] = { ...last, text: last.text + separator + msg.text };
+                                    return newPrev;
+                                }
+                                return [...prev, { role: msg.role, text: msg.text }];
+                            });
                         } else if (msg.type === 'system') {
                             console.log(`[SYSTEM] ${msg.level}: ${msg.message}`);
                             if (msg.level === 'error') {
