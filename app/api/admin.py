@@ -142,9 +142,7 @@ async def test_voice_gen(
         raise HTTPException(status_code=403, detail="Not authorized")
         
     settings = session.get(AppSettings, 1)
-    if not settings or not settings.openai_api_key:
-        raise HTTPException(status_code=400, detail="OpenAI key not configured")
-
+    
     # 1. Check Yandex
     yandex_voices = ['alisa', 'alena', 'filipp', 'jane', 'madirus', 'omazh', 'zahar', 'ermil']
     
@@ -188,6 +186,9 @@ async def test_voice_gen(
             raise HTTPException(status_code=500, detail=f"Yandex TTS failed: {str(e)}")
             
     # 2. Fallback to OpenAI
+    if not settings or not settings.openai_api_key:
+        raise HTTPException(status_code=400, detail="OpenAI key not configured")
+
     try:
         client = openai.OpenAI(api_key=settings.openai_api_key)
         response = client.audio.speech.create(

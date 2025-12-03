@@ -110,11 +110,12 @@ export default function AdminUsers() {
                 const audio = new Audio(url);
                 audio.play();
             } else {
-                alert('Failed to generate voice test');
+                const err = await res.json();
+                alert(`Failed to generate voice test: ${err.detail || res.statusText}`);
             }
         } catch (e) {
             console.error(e);
-            alert('Error testing voice');
+            alert(`Error testing voice: ${e}`);
         } finally {
             setTestingVoice(false);
         }
