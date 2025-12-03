@@ -283,39 +283,114 @@ async def voice_websocket(websocket: WebSocket):
                 if converter:
                     converter.close_stdin()
 
-        async def stt_loop():
-            def audio_generator():
-                while True:
-                    if not converter:
-                        break
-                    chunk = converter.read(4000)
-                    if not chunk:
-                        if converter.process.poll() is not None:
-                            break
-                        time.sleep(0.01)
-                        continue
-                    yield chunk
+        # VAD & STT State
+        audio_buffer = bytearray()
+        is_speaking = False
+        silence_start_time = 0
+        
+        # VAD Constants
+        SILENCE_THRESHOLD = 500  # Amplitude threshold (16-bit PCM)
+        SILENCE_DURATION = 1.0   # Seconds of silence to trigger STT
+        MIN_AUDIO_LENGTH = 0.5   # Minimum speech duration to process
+        
+        import audioop
+        import struct
 
-            try:
-                loop = asyncio.get_event_loop()
-                def run_sync_stt():
-                    try:
-                        logger.info(f"Starting Yandex STT stream with lang={stt_language}")
-                        # Keep using Yandex for streaming STT for now
-                        responses = yandex_service.recognize_stream(audio_generator(), language_code=stt_language)
-                        for response in responses:
-                            for chunk in response.chunks:
-                                if chunk.final:
-                                    text = chunk.alternatives[0].text
-                                    if text:
-                                        logger.info(f"STT Final: {text}")
-                                        asyncio.run_coroutine_threadsafe(process_user_text(text), loop)
-                    except Exception as e:
-                        logger.error(f"Yandex STT Error: {e}")
+        async def stt_loop():
+            nonlocal audio_buffer, is_speaking, silence_start_time
+            
+            logger.info("Starting VAD/STT loop (OpenAI Whisper)")
+            
+            while True:
+                if not converter:
+                    break
+                    
+                # Read chunk from converter (PCM s16le 48k mono)
+                chunk = await loop.run_in_executor(None, converter.read, 4000)
+                if not chunk:
+                    if converter.process.poll() is not None:
+                        break
+                    await asyncio.sleep(0.01)
+                    continue
                 
-                await loop.run_in_executor(None, run_sync_stt)
-            except Exception as e:
-                logger.error(f"Error in stt_loop: {e}")
+                # VAD Logic
+                # Calculate RMS (Root Mean Square) amplitude
+                try:
+                    rms = audioop.rms(chunk, 2) # 2 bytes width
+                except Exception:
+                    rms = 0
+                
+                if rms > SILENCE_THRESHOLD:
+                    if not is_speaking:
+                        is_speaking = True
+                        logger.info("Speech detected")
+                    silence_start_time = 0
+                    audio_buffer.extend(chunk)
+                else:
+                    if is_speaking:
+                        # We were speaking, now it's quiet
+                        if silence_start_time == 0:
+                            silence_start_time = time.time()
+                        
+                        audio_buffer.extend(chunk) # Keep recording silence briefly
+                        
+                        # Check duration
+                        if time.time() - silence_start_time > SILENCE_DURATION:
+                            # Silence timeout reached -> Process Audio
+                            logger.info(f"Silence detected ({SILENCE_DURATION}s). Processing {len(audio_buffer)} bytes...")
+                            
+                            # Check min length (48000 * 2 bytes * seconds)
+                            if len(audio_buffer) > 48000 * 2 * MIN_AUDIO_LENGTH:
+                                # Process
+                                temp_filename = f"static/audio/input_{uuid.uuid4()}.wav"
+                                os.makedirs("static/audio", exist_ok=True)
+                                full_path = os.path.join(os.getcwd(), temp_filename)
+                                
+                                # Write WAV
+                                with open(full_path, "wb") as f:
+                                    # WAV Header
+                                    f.write(b'RIFF' + struct.pack('<I', 36 + len(audio_buffer)) + b'WAVE' + \
+                                            b'fmt ' + struct.pack('<I', 16) + struct.pack('<HHIIHH', 1, 1, 48000, 48000 * 1 * 2, 1 * 2, 16) + \
+                                            b'data' + struct.pack('<I', len(audio_buffer)))
+                                    f.write(audio_buffer)
+                                
+                                # Transcribe with OpenAI
+                                try:
+                                    logger.info("Sending to Whisper...")
+                                    from openai import AsyncOpenAI
+                                    client = AsyncOpenAI(api_key=api_key)
+                                    
+                                    with open(full_path, "rb") as audio_file:
+                                        transcription = await client.audio.transcriptions.create(
+                                            model="whisper-1", 
+                                            file=audio_file,
+                                            language=None # Auto-detect language
+                                        )
+                                    
+                                    text = transcription.text
+                                    logger.info(f"Whisper STT: {text}")
+                                    
+                                    if text and text.strip():
+                                        await process_user_text(text)
+                                        
+                                except Exception as e:
+                                    logger.error(f"Whisper STT Error: {e}")
+                                finally:
+                                    # Cleanup
+                                    try:
+                                        os.remove(full_path)
+                                    except:
+                                        pass
+                            else:
+                                logger.info("Audio too short, discarding.")
+                            
+                            # Reset
+                            audio_buffer = bytearray()
+                            is_speaking = False
+                            silence_start_time = 0
+                    else:
+                        # Just silence, do nothing (or keep small buffer for context if needed, but simple VAD is fine)
+                        pass
 
         # Start loops
         receive_task = asyncio.create_task(receive_loop())
