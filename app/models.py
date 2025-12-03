@@ -35,6 +35,7 @@ class UserProfile(SQLModel, table=True):
     english_level: str  # A1, A2, B1, B2, C1
     goals: Optional[str] = None
     pains: Optional[str] = None
+    preferences: str = Field(default="{}") # JSON: { "preferred_address": "...", "preferred_voice": "..." }
     
     # Relationship to UserState
     state: Optional["UserState"] = Relationship(back_populates="user")
@@ -115,12 +116,22 @@ class UserAccount(SQLModel, table=True):
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    role: str = Field(default="student")
+
+class TutorSystemRule(SQLModel, table=True):
+    __tablename__ = "tutor_system_rules"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    rule_key: str = Field(unique=True)
+    rule_text: str
+    enabled: bool = Field(default=True)
+    sort_order: int = Field(default=0)
 
 class UserAccountRead(SQLModel):
     id: int
     email: str
     full_name: Optional[str] = None
     is_active: bool
+    role: str
 
 class AuthSession(SQLModel, table=True):
     __tablename__ = "auth_sessions"

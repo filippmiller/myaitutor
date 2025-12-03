@@ -44,10 +44,15 @@ def register(
         # Create UserAccount
         print(f"DEBUG: Hashing password of length {len(data.password)}")
         hashed_pwd = get_password_hash(data.password)
+        
+        from app.security import ADMIN_EMAIL
+        role = "admin" if data.email == ADMIN_EMAIL else "student"
+        
         new_user = UserAccount(
             email=data.email,
             hashed_password=hashed_pwd,
-            full_name=data.full_name
+            full_name=data.full_name,
+            role=role
         )
         db.add(new_user)
         db.commit()

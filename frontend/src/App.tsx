@@ -18,7 +18,7 @@ function NavBar() {
         <nav style={{ padding: '1rem', borderBottom: '1px solid #444', marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
                 <Link to="/app" style={{ marginRight: '1rem' }}>Student App</Link>
-                <Link to="/admin">Admin</Link>
+                {user?.role === 'admin' && <Link to="/admin">Admin</Link>}
             </div>
             <div>
                 {user ? (

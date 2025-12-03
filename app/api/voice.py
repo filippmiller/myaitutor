@@ -53,6 +53,31 @@ async def voice_chat(
             settings=settings
         )
         
+        # Handle detected preferences
+        if "detected_preferences" in analysis and analysis["detected_preferences"]:
+            import json
+            prefs_update = analysis["detected_preferences"]
+            # Ensure profile.preferences is valid JSON
+            try:
+                current_prefs = json.loads(profile.preferences)
+            except:
+                current_prefs = {}
+            
+            updated = False
+            if prefs_update.get("preferred_address"):
+                current_prefs["preferred_address"] = prefs_update["preferred_address"]
+                updated = True
+            if prefs_update.get("preferred_voice"):
+                current_prefs["preferred_voice"] = prefs_update["preferred_voice"]
+                updated = True
+                
+            if updated:
+                profile.preferences = json.dumps(current_prefs)
+                session.add(profile)
+                session.commit()
+                session.refresh(profile)
+
+        
         apply_learning_update(session, state, analysis)
         create_session_summary(session, current_user, analysis)
         

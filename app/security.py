@@ -10,6 +10,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
 SESSION_EXPIRE_HOURS = int(os.getenv("SESSION_EXPIRE_HOURS", 24))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "False").lower() == "true"
 ALGORITHM = "HS256"
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "filipp@ailingva.com")
 
 pwd_context = CryptContext(schemes=["argon2", "bcrypt"], deprecated="auto")
 

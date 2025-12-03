@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from app.database import get_session
-from app.models import AppSettings
+from app.models import AppSettings, UserAccount, UserProfile, TutorSystemRule
+from app.services.auth_service import get_current_user
 from pydantic import BaseModel
 import openai
 import requests
@@ -52,5 +53,78 @@ def test_openai(session: Session = Depends(get_session)):
         return {"status": "ok", "message": "OpenAI connection successful", "response": response.choices[0].message.content}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@router.get("/users")
+def list_users(
+    offset: int = 0, 
+    limit: int = 50, 
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    users = session.exec(select(UserAccount).offset(offset).limit(limit)).all()
+    return users
+
+@router.get("/users/{user_id}")
+def get_user_details(
+    user_id: int,
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    user = session.get(UserAccount, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # Get profile
+    profile = session.exec(select(UserProfile).where(UserProfile.user_account_id == user.id)).first()
+    
+    return {
+        "account": user,
+        "profile": profile
+    }
+
+@router.get("/system-rules")
+def list_system_rules(
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    rules = session.exec(select(TutorSystemRule).order_by(TutorSystemRule.sort_order)).all()
+    return rules
+
+class SystemRuleUpdate(BaseModel):
+    rule_text: str
+    enabled: bool
+    sort_order: int
+
+@router.patch("/system-rules/{rule_id}")
+def update_system_rule(
+    rule_id: int,
+    data: SystemRuleUpdate,
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    rule = session.get(TutorSystemRule, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+        
+    rule.rule_text = data.rule_text
+    rule.enabled = data.enabled
+    rule.sort_order = data.sort_order
+    
+    session.add(rule)
+    session.commit()
+    session.refresh(rule)
+    return rule
 
 

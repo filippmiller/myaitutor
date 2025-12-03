@@ -81,7 +81,8 @@ Output JSON with strictly this structure:
   "practiced_words": ["word1", "word2", "word3"],
   "grammar_notes": ["short bullet about grammar issue"],
   "session_summary": "one sentence summary",
-  "xp_delta": 1
+  "xp_delta": 1,
+  "detected_preferences": {{ "preferred_address": "string or null", "preferred_voice": "string or null" }}
 }}
 
 Limit:
@@ -89,6 +90,7 @@ Limit:
 - Words should be in English, in base form (no duplicates).
 - session_summary should be max 1–2 sentences.
 - grammar_notes is optional (can be empty array).
+- detected_preferences: extract ONLY if the user explicitly states how they want to be addressed or which voice to use. Otherwise null.
 """
 
     try:
@@ -145,9 +147,11 @@ async def process_voice_interaction(
     history = db_session.exec(history_statement).all()
     history.reverse() # Oldest first
 
+    from app.services.tutor_service import build_tutor_system_prompt
+    system_prompt = build_tutor_system_prompt(db_session, user)
+
     messages = [
-        {"role": "system", "content": SYSTEM_TUTOR_PROMPT},
-        {"role": "system", "content": f"Student Name: {user.name}. Level: {user.english_level}. Goals: {user.goals}. Pains: {user.pains}. Weak words: {user.state.weak_words_json}. Known words: {user.state.known_words_json}."}
+        {"role": "system", "content": system_prompt}
     ]
     
     for msg in history:
@@ -174,9 +178,30 @@ async def process_voice_interaction(
     speech_file_path = f"static/audio/response_{asst_msg.id}.mp3"
     os.makedirs("static/audio", exist_ok=True)
     
+    # Determine voice
+    try:
+        prefs = json.loads(user.preferences)
+        voice_pref = prefs.get("preferred_voice")
+    except:
+        voice_pref = None
+        
+    # Simple mapping for OpenAI TTS
+    # alloy, echo, fable, onyx, nova, shimmer
+    voice_map = {
+        "male_deep": "onyx",
+        "male_neutral": "echo",
+        "female_neutral": "shimmer",
+        "female_soft": "nova",
+        "default": "alloy"
+    }
+    openai_voice = voice_map.get(voice_pref, "alloy")
+    # If the user just said "onyx" or "shimmer", support that too
+    if voice_pref in ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]:
+        openai_voice = voice_pref
+
     response = client.audio.speech.create(
         model="tts-1",
-        voice="alloy",
+        voice=openai_voice,
         input=assistant_text
     )
     
