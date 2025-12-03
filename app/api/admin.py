@@ -365,3 +365,30 @@ def save_user_voice(
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
+@router.get("/voice/stack")
+def get_voice_stack(
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    settings = session.get(AppSettings, 1)
+    
+    # Get stats
+    from app.api.voice_ws import get_latency_stats
+    stats = get_latency_stats()
+    
+    return {
+        "stt": {
+            "provider": "openai-realtime" if not settings else "openai (whisper)", # Simplified view
+            "model": "whisper-1",
+            "streaming": True
+        },
+        "tts": {
+            "provider": "openai/yandex",
+            "model": "tts-1/yandex",
+            "streaming": True
+        },
+        "latency": stats
+    }

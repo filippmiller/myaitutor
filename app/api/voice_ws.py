@@ -18,9 +18,26 @@ from app.models import AppSettings, UserAccount, UserProfile, AuthSession
 from app.services.yandex_service import YandexService, AudioConverter
 from app.services.voice_engine import get_voice_engine
 
+from collections import deque
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# In-memory stats
+LATENCY_STATS = {
+    "tts": deque(maxlen=20),
+    "stt": deque(maxlen=20)
+}
+
+def get_latency_stats():
+    tts_avg = sum(LATENCY_STATS["tts"]) / len(LATENCY_STATS["tts"]) if LATENCY_STATS["tts"] else 0
+    stt_avg = sum(LATENCY_STATS["stt"]) / len(LATENCY_STATS["stt"]) if LATENCY_STATS["stt"] else 0
+    return {
+        "tts_avg_ms": round(tts_avg, 2),
+        "stt_avg_ms": round(stt_avg, 2),
+        "samples": len(LATENCY_STATS["tts"])
+    }
 
 router = APIRouter()
 
@@ -320,20 +337,35 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
 
     # Helpers
     async def synthesize_and_send(text: str):
+        start_time = time.time()
+        first_chunk_sent = False
         try:
-            audio_bytes = await tts_engine.synthesize(text, voice_id=voice_id)
-            if audio_bytes:
-                await websocket.send_bytes(audio_bytes)
+            # Use streaming synthesis
+            async for chunk in tts_engine.synthesize_stream(text, voice_id=voice_id):
+                if chunk:
+                    await websocket.send_bytes(chunk)
+                    if not first_chunk_sent:
+                        latency = (time.time() - start_time) * 1000
+                        logger.info(f"TTS Latency ({tts_engine_name}): {latency:.2f}ms")
+                        LATENCY_STATS["tts"].append(latency)
+                        first_chunk_sent = True
         except Exception as e:
             logger.error(f"TTS Error: {e}")
 
     async def process_user_text(text: str):
+        stt_end_time = time.time()
+        # Estimate STT latency (approximate, since we don't have exact start of speech here easily without more state)
+        # But we can log that we got text.
+        logger.info(f"STT Text: {text}")
+        
         await websocket.send_json({"type": "transcript", "role": "user", "text": text})
         conversation_history.append({"role": "user", "content": text})
         
         try:
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=api_key)
+            
+            llm_start_time = time.time()
             stream = await client.chat.completions.create(
                 model=settings.default_model,
                 messages=conversation_history,
@@ -349,6 +381,7 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                 if content:
                     full_resp += content
                     curr_sent += content
+                    # Simple sentence splitting
                     if re.search(r'[.!?]\s', curr_sent):
                         await websocket.send_json({"type": "transcript", "role": "assistant", "text": curr_sent})
                         await synthesize_and_send(curr_sent)

@@ -3,6 +3,7 @@ import TokensPanel from '../components/TokensPanel';
 import AdminUsers from '../components/AdminUsers';
 import AdminRules from '../components/AdminRules';
 import AdminBilling from '../components/AdminBilling';
+import AdminAnalytics from '../components/AdminAnalytics';
 
 export default function Admin() {
     const [activeTab, setActiveTab] = useState('settings');
@@ -75,6 +76,12 @@ export default function Admin() {
                 >
                     Billing
                 </button>
+                <button
+                    onClick={() => setActiveTab('analytics')}
+                    style={{ background: activeTab === 'analytics' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px' }}
+                >
+                    Analytics
+                </button>
             </div>
 
             {activeTab === 'settings' && (
@@ -131,6 +138,7 @@ export default function Admin() {
             {activeTab === 'users' && <AdminUsers />}
             {activeTab === 'rules' && <AdminRules />}
             {activeTab === 'billing' && <AdminBilling />}
+            {activeTab === 'analytics' && <AdminAnalytics />}
         </div>
     );
 }

@@ -1,11 +1,13 @@
-from typing import Protocol, Optional
+from typing import Protocol, Optional, AsyncGenerator
 import os
 from openai import OpenAI
 from app.services.yandex_service import YandexService
 import subprocess
+import asyncio
 
 class VoiceEngine(Protocol):
     async def synthesize(self, text: str, voice_id: str | None = None) -> bytes: ...
+    async def synthesize_stream(self, text: str, voice_id: str | None = None) -> AsyncGenerator[bytes, None]: ...
     async def transcribe(self, audio_bytes: bytes) -> str: ...
 
 class OpenAIVoiceEngine:
@@ -30,6 +32,27 @@ class OpenAIVoiceEngine:
             print(f"OpenAI TTS Error: {e}")
             raise e
 
+    async def synthesize_stream(self, text: str, voice_id: str | None = None) -> AsyncGenerator[bytes, None]:
+        valid_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+        voice = voice_id if voice_id in valid_voices else "alloy"
+        
+        try:
+            # Use the streaming helper
+            with self.client.audio.speech.with_streaming_response.create(
+                model=self.tts_model,
+                voice=voice,
+                input=text,
+                response_format="mp3"
+            ) as response:
+                for chunk in response.iter_bytes(chunk_size=4096):
+                    if chunk:
+                        yield chunk
+                        # Yield control to event loop to allow sending
+                        await asyncio.sleep(0)
+        except Exception as e:
+            print(f"OpenAI TTS Stream Error: {e}")
+            raise e
+
     async def transcribe(self, audio_bytes: bytes) -> str:
         # OpenAI requires a file-like object with a name
         import io
@@ -51,12 +74,17 @@ class YandexVoiceEngine:
         self.service = YandexService()
 
     async def synthesize(self, text: str, voice_id: str | None = None) -> bytes:
-        # Default to alena if not specified
+        # Reuse stream implementation
+        chunks = []
+        async for chunk in self.synthesize_stream(text, voice_id):
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    async def synthesize_stream(self, text: str, voice_id: str | None = None) -> AsyncGenerator[bytes, None]:
         voice = voice_id if voice_id else "alena"
         
         try:
-            # Yandex returns PCM chunks. We need to convert to MP3/bytes.
-            # We'll use ffmpeg to convert the stream to MP3 bytes.
+            # Start ffmpeg process to convert PCM stream to MP3 stream
             process = subprocess.Popen(
                 [
                     "ffmpeg",
@@ -69,22 +97,37 @@ class YandexVoiceEngine:
                 stderr=subprocess.DEVNULL
             )
             
-            # We need to feed chunks to stdin. 
-            # Since synthesize_stream is a generator, we can't easily use communicate with input=bytes.
-            # We'll start a thread or just write in a loop if the buffer allows, 
-            # but for simplicity/safety with subprocess, let's collect PCM first or write carefully.
-            # Actually, writing to stdin can block if stdout buffer fills up.
-            # Let's try a simpler approach: collect all PCM first (it's short sentences usually).
+            loop = asyncio.get_running_loop()
             
-            pcm_data = b""
-            for chunk in self.service.synthesize_stream(text=text, voice=voice):
-                pcm_data += chunk
-                
-            stdout, _ = process.communicate(input=pcm_data)
-            return stdout
+            # Queue for chunks to write to ffmpeg
+            # We need a separate task to write to stdin because reading from stdout blocks
+            
+            async def writer():
+                try:
+                    for pcm_chunk in self.service.synthesize_stream(text=text, voice=voice):
+                        # Write to ffmpeg stdin
+                        # This is blocking IO in a thread executor
+                        await loop.run_in_executor(None, process.stdin.write, pcm_chunk)
+                    await loop.run_in_executor(None, process.stdin.close)
+                except Exception as e:
+                    print(f"Yandex Writer Error: {e}")
+                    try: process.stdin.close()
+                    except: pass
+
+            asyncio.create_task(writer())
+            
+            # Read from stdout
+            while True:
+                # Read small chunks
+                chunk = await loop.run_in_executor(None, process.stdout.read, 4096)
+                if not chunk:
+                    break
+                yield chunk
+            
+            process.wait()
             
         except Exception as e:
-            print(f"Yandex TTS Error: {e}")
+            print(f"Yandex TTS Stream Error: {e}")
             raise e
 
     async def transcribe(self, audio_bytes: bytes) -> str:
@@ -117,13 +160,6 @@ class YandexVoiceEngine:
             # We need to extract text.
             full_text = ""
             for response in self.service.recognize_stream(chunk_generator(pcm_data)):
-                # This is a simplification. Real Yandex response parsing depends on the proto structure.
-                # Looking at yandex_service.py, it returns the raw response object.
-                # We need to see how to extract text.
-                # The existing code doesn't show the consumption logic fully for STT, 
-                # but let's assume standard Yandex STT response.
-                # Actually, let's look at yandex_service.py again if needed.
-                # For now, I'll implement a basic extraction based on common Yandex protos.
                 if response.chunks:
                     full_text += response.chunks[0].alternatives[0].text
             
@@ -138,8 +174,6 @@ def get_voice_engine(engine_name: str, api_key: str | None = None) -> VoiceEngin
         return YandexVoiceEngine()
     else:
         # Default to OpenAI
-        # We need an API key for OpenAI. 
-        # Ideally this comes from settings, but here we pass it or get from env.
         key = api_key or os.getenv("OPENAI_API_KEY")
         if not key:
             raise ValueError("OpenAI API Key required for OpenAIVoiceEngine")
