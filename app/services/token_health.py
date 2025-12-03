@@ -148,23 +148,110 @@ async def test_openai_key(api_key: str, model: str = "gpt-4o-mini") -> TokenHeal
 
 async def test_yandex_speechkit_key(api_key: str) -> TokenHealthResult:
     """
-    Test a Yandex SpeechKit API key.
-    
-    Note: This is a placeholder for future implementation.
-    Yandex keys are currently loaded from env vars, not the database.
+    Test a Yandex SpeechKit API key using the REST API (TTS).
     
     Args:
         api_key: The Yandex API key to test
         
     Returns:
-        TokenHealthResult
+        TokenHealthResult with status, message, and full debug info
     """
-    # TODO: Implement Yandex key testing
-    # For now, return unknown
-    return TokenHealthResult(
-        status="unknown",
-        message="Yandex SpeechKit health check not yet implemented"
-    )
+    url = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
+    headers = {
+        "Authorization": f"Api-Key {api_key}"
+    }
+    data = {
+        "text": "test",
+        "lang": "ru-RU",
+        "voice": "alena"
+    }
+    
+    # Prepare debug info structure
+    debug_info = {
+        "provider": "Yandex SpeechKit",
+        "test_time": datetime.utcnow().isoformat(),
+        "request": {
+            "url": url,
+            "method": "POST",
+            "headers": {
+                "Authorization": f"Api-Key {api_key[:8]}..." if api_key else "None",
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            "body": data
+        },
+        "response": None,
+        "http_status": None,
+        "error": None
+    }
+
+    try:
+        import httpx
+        
+        logger.info("Testing Yandex SpeechKit API key...")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, data=data)
+            
+            debug_info["http_status"] = response.status_code
+            
+            # For success (audio), we don't want to log the binary body
+            if response.status_code == 200:
+                debug_info["response"] = {
+                    "content_type": response.headers.get("content-type"),
+                    "size_bytes": len(response.content),
+                    "message": "Audio data received successfully"
+                }
+                
+                logger.info("Yandex key test: SUCCESS")
+                return TokenHealthResult(
+                    status="ok",
+                    message="✓ Key is valid. TTS request succeeded.",
+                    debug_info=debug_info
+                )
+            else:
+                # Try to parse error JSON if possible
+                try:
+                    error_json = response.json()
+                    debug_info["response"] = error_json
+                    error_msg = error_json.get("error_message", response.text)
+                except:
+                    debug_info["response"] = response.text
+                    error_msg = response.text
+
+                logger.warning(f"Yandex key test failed: HTTP {response.status_code} - {error_msg}")
+                
+                status = "error"
+                if response.status_code == 401:
+                    status = "invalid"
+                    msg = "✗ Invalid API key (HTTP 401 Unauthorized)"
+                elif response.status_code == 429:
+                    status = "quota"
+                    msg = "⚠ Rate limit exceeded (HTTP 429)"
+                else:
+                    msg = f"✗ Error: HTTP {response.status_code}"
+
+                return TokenHealthResult(
+                    status=status,
+                    message=msg,
+                    raw_error=error_msg,
+                    debug_info=debug_info
+                )
+
+    except Exception as e:
+        error_str = str(e)
+        logger.error(f"Yandex key test exception: {e}")
+        
+        debug_info["error"] = {
+            "type": type(e).__name__,
+            "message": error_str
+        }
+        
+        return TokenHealthResult(
+            status="error",
+            message=f"✗ Connection error: {error_str[:100]}",
+            raw_error=error_str,
+            debug_info=debug_info
+        )
 
 def mask_api_key(key: str | None) -> str:
     """
