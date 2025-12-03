@@ -1,5 +1,22 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from app.database import create_db_and_tables
+from app.api import admin, voice, voice_ws, tokens
+from app.api.routes import auth, progress
+import os
+
+app = FastAPI(title="AIlingva MVP")
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Database init
 @app.on_event("startup")
 def on_startup():
@@ -17,6 +34,9 @@ app.include_router(progress.router, prefix="/api/progress", tags=["progress"])
 from app.api.routes import billing, admin_billing
 app.include_router(billing.router, prefix="/api/billing", tags=["billing"])
 app.include_router(admin_billing.router, prefix="/api/admin/billing", tags=["admin_billing"])
+
+from app.api.routes import admin_analytics
+app.include_router(admin_analytics.router, prefix="/api/admin/analytics", tags=["admin_analytics"])
 
 # Static files (Audio)
 os.makedirs("static/audio", exist_ok=True)
@@ -51,4 +71,3 @@ if os.path.exists("frontend/dist"):
         return FileResponse("frontend/dist/index.html")
 else:
     print("Frontend build not found. Run 'npm run build' in frontend/ directory.")
-
