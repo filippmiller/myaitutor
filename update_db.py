@@ -25,6 +25,31 @@ def update_schema():
             print(f"Note: preferences column update skipped (probably exists): {e}")
             session.rollback()
 
+        # 3. Add language mode columns to lesson_sessions
+        try:
+            session.exec(text("ALTER TABLE lesson_sessions ADD COLUMN language_mode VARCHAR"))
+            session.commit()
+            print("Added language_mode to lesson_sessions")
+        except Exception as e:
+            print(f"Note: language_mode column update skipped: {e}")
+            session.rollback()
+
+        try:
+            session.exec(text("ALTER TABLE lesson_sessions ADD COLUMN language_level INTEGER"))
+            session.commit()
+            print("Added language_level to lesson_sessions")
+        except Exception as e:
+            print(f"Note: language_level column update skipped: {e}")
+            session.rollback()
+
+        try:
+            session.exec(text("ALTER TABLE lesson_sessions ADD COLUMN language_chosen_at TIMESTAMP WITHOUT TIME ZONE"))
+            session.commit()
+            print("Added language_chosen_at to lesson_sessions")
+        except Exception as e:
+            print(f"Note: language_chosen_at column update skipped: {e}")
+            session.rollback()
+
     # 3. Create TutorSystemRule table
     # SQLModel.metadata.create_all(engine) checks existence but sometimes it's tricky with updates.
     # But since TutorSystemRule is new, create_all should work fine.

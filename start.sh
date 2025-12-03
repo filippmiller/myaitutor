@@ -11,5 +11,9 @@ ls -la frontend/dist || echo "frontend/dist NOT FOUND"
 PORT="${PORT:-8080}"
 echo "Using PORT: $PORT"
 
+# Run migrations
+echo "Running database migrations..."
+python update_db.py
+
 # Run uvicorn
 exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
