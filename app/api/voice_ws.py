@@ -49,6 +49,10 @@ async def voice_websocket(websocket: WebSocket):
             # Use DB setting or fallback to env var
             api_key = settings.openai_api_key if settings and settings.openai_api_key else os.getenv("OPENAI_API_KEY")
             
+            # Sanitize key
+            if api_key:
+                api_key = api_key.strip().strip("'").strip('"')
+            
             if not api_key:
                 logger.error("OpenAI API Key missing in settings and environment")
                 await websocket.send_json({"type": "system", "level": "error", "message": "OpenAI API Key missing. Please configure it in settings."})

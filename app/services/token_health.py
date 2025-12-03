@@ -29,6 +29,10 @@ async def test_openai_key(api_key: str, model: str = "gpt-4o-mini") -> TokenHeal
     Returns:
         TokenHealthResult with status, message, and full debug info
     """
+    # Sanitize key: remove whitespace and quotes
+    if api_key:
+        api_key = api_key.strip().strip("'").strip('"')
+
     debug_info = {
         "provider": "OpenAI",
         "test_time": datetime.utcnow().isoformat(),
@@ -156,6 +160,10 @@ async def test_yandex_speechkit_key(api_key: str) -> TokenHealthResult:
     Returns:
         TokenHealthResult with status, message, and full debug info
     """
+    # Sanitize key
+    if api_key:
+        api_key = api_key.strip().strip("'").strip('"')
+
     url = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
     headers = {
         "Authorization": f"Api-Key {api_key}"
