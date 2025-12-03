@@ -28,6 +28,14 @@ class UsageService:
         base_rate = Decimal("5.00")
         billed_amount_rub = Decimal(billed_minutes) * base_rate
 
+        # Capture tariff snapshot
+        import json
+        tariff_snapshot = {
+            "base_rate_rub_per_min": 5,
+            "currency": "RUB",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
         usage = UsageSession(
             user_account_id=user_id,
             started_at=started_at,
@@ -35,7 +43,8 @@ class UsageService:
             duration_sec=duration_sec,
             billed_minutes=billed_minutes,
             billed_amount_rub=billed_amount_rub,
-            billing_status="pending"
+            billing_status="pending",
+            tariff_snapshot=json.dumps(tariff_snapshot)
         )
         self.session.add(usage)
         self.session.commit()
