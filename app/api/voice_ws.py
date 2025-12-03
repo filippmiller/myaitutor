@@ -50,11 +50,10 @@ async def voice_websocket(websocket: WebSocket):
         
         if session_id:
             auth_session = session.get(AuthSession, session_id)
-            if auth_session and not auth_session.is_revoked and auth_session.expires_at > os.environ.get("NOW", time.time()): # Simple check, real time check below
-                 # Re-implement simple expiry check
-                 from datetime import datetime
-                 if auth_session.expires_at > datetime.utcnow():
-                     user = session.get(UserAccount, auth_session.user_id)
+            # Fix: Compare datetime with datetime
+            from datetime import datetime
+            if auth_session and not auth_session.is_revoked and auth_session.expires_at > datetime.utcnow():
+                 user = session.get(UserAccount, auth_session.user_id)
         
         if not user:
             logger.warning("Unauthenticated WebSocket connection")
