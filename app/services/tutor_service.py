@@ -236,7 +236,50 @@ This is the student's FIRST message in this session. You MUST:
         prompt_parts.append(f"Preferred Address: {preferred_address}")
     else:
         prompt_parts.append("Preferred Address: Not set. You should politely ask for it in the first message.")
-        
+
+    # --- ABSOLUTE BEGINNER CURRICULUM INJECTION ---
+    # Check if user is beginner (A1 or explicit "Absolute Beginner")
+    if user.english_level in ["A1", "Beginner", "Absolute Beginner", "Zero"]:
+        try:
+            import os
+            rules_path = os.path.join(os.getcwd(), "app", "data", "tutor_rules_beginner.json")
+            if os.path.exists(rules_path):
+                with open(rules_path, "r", encoding="utf-8") as f:
+                    beginner_rules = json.load(f)
+                
+                prompt_parts.append("\\n**🎓 SPECIAL CURRICULUM: ABSOLUTE BEGINNER**")
+                prompt_parts.append("You are teaching a complete beginner. Follow this strict structure.")
+                
+                prompt_parts.append(f"\\n**Goals:**")
+                for g in beginner_rules.get('goals', []):
+                    prompt_parts.append(f"- {g}")
+                
+                prompt_parts.append("\\n**Teaching Principles (CRITICAL):**")
+                for p in beginner_rules.get('teaching_principles', []):
+                    prompt_parts.append(f"- {p}")
+                    
+                prompt_parts.append("\\n**⛔ FORBIDDEN (DO NOT DO THIS):**")
+                for f in beginner_rules.get('forbidden', []):
+                    prompt_parts.append(f"- {f}")
+                    
+                prompt_parts.append("\\n**📋 Lesson Structure (Follow strictly step-by-step):**")
+                for step in beginner_rules.get('lesson_structure', []):
+                    prompt_parts.append(f"Step {step['step']} [{step['name']}]: {step['description']}")
+                    prompt_parts.append(f"   Example: \"{step['example']}\"")
+                    
+                prompt_parts.append("\\n**Core Vocabulary (Limit yourself to these):**")
+                cats = beginner_rules.get('core_categories', {})
+                for cat, words in cats.items():
+                    prompt_parts.append(f"- {cat}: {', '.join(words)}")
+                    
+                prompt_parts.append("\\n**Grammar Explanations:**")
+                for rule in beginner_rules.get('grammar_rules', []):
+                    prompt_parts.append(f"- {rule['rule']}: {rule['explanation']}")
+                    
+        except Exception as e:
+            # Fallback or log error
+            prompt_parts.append(f"\\n[System Error loading beginner rules: {str(e)}]")
+
     # Memory
     prompt_parts.append("\\n**Memory:**")
     if memory["last_summary"]:

@@ -6,6 +6,7 @@ import AdminBilling from '../components/AdminBilling';
 import AdminAnalytics from '../components/AdminAnalytics';
 import AIChatPanel from '../components/AIChatPanel';
 import AdminAIRules from '../components/AdminAIRules';
+import AdminBeginnerRules from '../components/AdminBeginnerRules';
 
 export default function Admin() {
     const [activeTab, setActiveTab] = useState('settings');
@@ -54,42 +55,48 @@ export default function Admin() {
         <div className="card">
             <h2>Admin Dashboard</h2>
 
-            <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', borderBottom: '1px solid #444' }}>
+            <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', borderBottom: '1px solid #444', overflowX: 'auto', paddingBottom: '5px' }}>
                 <button
                     onClick={() => setActiveTab('settings')}
-                    style={{ background: activeTab === 'settings' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px' }}
+                    style={{ background: activeTab === 'settings' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px', whiteSpace: 'nowrap' }}
                 >
                     Settings
                 </button>
                 <button
                     onClick={() => setActiveTab('users')}
-                    style={{ background: activeTab === 'users' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px' }}
+                    style={{ background: activeTab === 'users' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px', whiteSpace: 'nowrap' }}
                 >
                     Users
                 </button>
                 <button
                     onClick={() => setActiveTab('rules')}
-                    style={{ background: activeTab === 'rules' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px' }}
+                    style={{ background: activeTab === 'rules' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px', whiteSpace: 'nowrap' }}
                 >
                     System Rules
                 </button>
                 <button
+                    onClick={() => setActiveTab('ai-rules')}
+                    style={{ background: activeTab === 'ai-rules' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px', whiteSpace: 'nowrap' }}
+                >
+                    AI Rules
+                </button>
+                <button
+                    onClick={() => setActiveTab('beginner-rules')}
+                    style={{ background: activeTab === 'beginner-rules' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px', whiteSpace: 'nowrap' }}
+                >
+                    Beginner Rules
+                </button>
+                <button
                     onClick={() => setActiveTab('billing')}
-                    style={{ background: activeTab === 'billing' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px' }}
+                    style={{ background: activeTab === 'billing' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px', whiteSpace: 'nowrap' }}
                 >
                     Billing
                 </button>
                 <button
                     onClick={() => setActiveTab('analytics')}
-                    style={{ background: activeTab === 'analytics' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px' }}
+                    style={{ background: activeTab === 'analytics' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px', whiteSpace: 'nowrap' }}
                 >
                     Analytics
-                </button>
-                <button
-                    onClick={() => setActiveTab('ai-rules')}
-                    style={{ background: activeTab === 'ai-rules' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px' }}
-                >
-                    AI Rules
                 </button>
             </div>
 
@@ -149,6 +156,7 @@ export default function Admin() {
             {activeTab === 'billing' && <AdminBilling />}
             {activeTab === 'analytics' && <AdminAnalytics />}
             {activeTab === 'ai-rules' && <AdminAIRules />}
+            {activeTab === 'beginner-rules' && <AdminBeginnerRules />}
 
             {/* Floating AI Button */}
             {!aiChatOpen && (

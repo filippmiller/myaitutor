@@ -392,3 +392,45 @@ def get_voice_stack(
         },
         "latency": stats
     }
+
+# --- Beginner Rules Management ---
+
+@router.get("/beginner-rules")
+def get_beginner_rules(
+    current_user: UserAccount = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    import os
+    import json
+    rules_path = os.path.join(os.getcwd(), "app", "data", "tutor_rules_beginner.json")
+    
+    if not os.path.exists(rules_path):
+        return {}
+        
+    try:
+        with open(rules_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load rules: {str(e)}")
+
+@router.post("/beginner-rules")
+def save_beginner_rules(
+    data: dict,
+    current_user: UserAccount = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    import os
+    import json
+    rules_path = os.path.join(os.getcwd(), "app", "data", "tutor_rules_beginner.json")
+    
+    try:
+        with open(rules_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return {"status": "ok", "message": "Rules saved"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save rules: {str(e)}")
+
