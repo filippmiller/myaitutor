@@ -182,13 +182,17 @@ async def process_voice_interaction(
     try:
         prefs = json.loads(user.preferences)
         voice_pref = prefs.get("preferred_voice")
-    except:
+        print(f"DEBUG: User preferences: {prefs}")
+        print(f"DEBUG: Selected voice preference: {voice_pref}")
+    except Exception as e:
+        print(f"DEBUG: Error parsing preferences: {e}")
         voice_pref = None
         
     # Yandex Voices
     yandex_voices = ['alisa', 'alena', 'filipp', 'jane', 'madirus', 'omazh', 'zahar', 'ermil']
     
     if voice_pref in yandex_voices:
+        print(f"DEBUG: Attempting Yandex TTS with voice: {voice_pref}")
         try:
             from app.services.yandex_service import YandexService
             import subprocess
@@ -213,10 +217,12 @@ async def process_voice_interaction(
                 try:
                     process.stdin.write(chunk)
                 except BrokenPipeError:
+                    print("DEBUG: ffmpeg stdin broken pipe")
                     break
             
             process.stdin.close()
             process.wait()
+            print(f"DEBUG: Yandex TTS successful, saved to {full_path}")
             
             return {
                 "user_text": user_text,
@@ -224,7 +230,9 @@ async def process_voice_interaction(
                 "audio_url": f"/static/audio/response_{asst_msg.id}.mp3"
             }
         except Exception as e:
-            print(f"Yandex TTS failed: {e}, falling back to OpenAI")
+            print(f"DEBUG: Yandex TTS failed: {e}, falling back to OpenAI")
+            import traceback
+            traceback.print_exc()
             # Fallback to OpenAI logic below
 
     # Simple mapping for OpenAI TTS

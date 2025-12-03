@@ -128,6 +128,78 @@ def update_user_preferences(
     
     return profile
 
+class TestVoiceRequest(BaseModel):
+    text: str
+    voice: str
+
+@router.post("/test-voice-gen")
+async def test_voice_gen(
+    data: TestVoiceRequest,
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    settings = session.get(AppSettings, 1)
+    if not settings or not settings.openai_api_key:
+        raise HTTPException(status_code=400, detail="OpenAI key not configured")
+
+    # 1. Check Yandex
+    yandex_voices = ['alisa', 'alena', 'filipp', 'jane', 'madirus', 'omazh', 'zahar', 'ermil']
+    
+    import os
+    import uuid
+    from fastapi.responses import FileResponse
+    
+    temp_filename = f"static/audio/test_{uuid.uuid4()}.mp3"
+    os.makedirs("static/audio", exist_ok=True)
+    full_path = os.path.join(os.getcwd(), temp_filename)
+    
+    if data.voice in yandex_voices:
+        try:
+            from app.services.yandex_service import YandexService
+            import subprocess
+            yandex_service = YandexService()
+            
+            process = subprocess.Popen(
+                [
+                    "ffmpeg",
+                    "-f", "s16le", "-ar", "48000", "-ac", "1", "-i", "pipe:0",
+                    "-y",
+                    full_path
+                ],
+                stdin=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+            
+            for chunk in yandex_service.synthesize_stream(text=data.text, voice=data.voice):
+                try:
+                    process.stdin.write(chunk)
+                except BrokenPipeError:
+                    break
+            
+            process.stdin.close()
+            process.wait()
+            
+            return FileResponse(full_path)
+        except Exception as e:
+            print(f"Yandex Test Failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Yandex TTS failed: {str(e)}")
+            
+    # 2. Fallback to OpenAI
+    try:
+        client = openai.OpenAI(api_key=settings.openai_api_key)
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice=data.voice if data.voice in ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] else "alloy",
+            input=data.text
+        )
+        response.stream_to_file(full_path)
+        return FileResponse(full_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI TTS failed: {str(e)}")
+
 @router.get("/system-rules")
 def list_system_rules(
     current_user: UserAccount = Depends(get_current_user),

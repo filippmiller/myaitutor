@@ -21,9 +21,27 @@ export default function AdminUsers() {
     const [selectedUser, setSelectedUser] = useState<{ account: User, profile: UserProfile } | null>(null);
     const [loading, setLoading] = useState(false);
 
+    // Preference state
+    const [prefAddress, setPrefAddress] = useState('');
+    const [prefVoice, setPrefVoice] = useState('alloy');
+    const [testingVoice, setTestingVoice] = useState(false);
+
     useEffect(() => {
         fetchUsers();
     }, []);
+
+    useEffect(() => {
+        if (selectedUser && selectedUser.profile) {
+            try {
+                const p = JSON.parse(selectedUser.profile.preferences || '{}');
+                setPrefAddress(p.preferred_address || '');
+                setPrefVoice(p.preferred_voice || 'alloy');
+            } catch (e) {
+                setPrefAddress('');
+                setPrefVoice('alloy');
+            }
+        }
+    }, [selectedUser]);
 
     const fetchUsers = async () => {
         setLoading(true);
@@ -49,6 +67,56 @@ export default function AdminUsers() {
             }
         } catch (e) {
             console.error(e);
+        }
+    };
+
+    const handleSavePrefs = async () => {
+        if (!selectedUser) return;
+        try {
+            const res = await fetch(`/api/admin/users/${selectedUser.account.id}/preferences`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    preferred_address: prefAddress,
+                    preferred_voice: prefVoice
+                })
+            });
+            if (res.ok) {
+                alert('Saved!');
+                fetchUserDetails(selectedUser.account.id);
+            } else {
+                alert('Error saving');
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Error saving');
+        }
+    };
+
+    const handleTestVoice = async () => {
+        setTestingVoice(true);
+        try {
+            const res = await fetch('/api/admin/test-voice-gen', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: "Hello, this is a test of the selected voice.",
+                    voice: prefVoice
+                })
+            });
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                audio.play();
+            } else {
+                alert('Failed to generate voice test');
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Error testing voice');
+        } finally {
+            setTestingVoice(false);
         }
     };
 
@@ -93,16 +161,16 @@ export default function AdminUsers() {
                             <input
                                 type="text"
                                 placeholder="e.g. My Lord"
-                                defaultValue={JSON.parse(selectedUser.profile?.preferences || '{}').preferred_address || ''}
-                                id="pref-address"
+                                value={prefAddress}
+                                onChange={e => setPrefAddress(e.target.value)}
                                 style={{ marginLeft: '10px' }}
                             />
                         </label>
                         <label style={{ display: 'block', marginBottom: '10px' }}>
                             Voice:
                             <select
-                                id="pref-voice"
-                                defaultValue={JSON.parse(selectedUser.profile?.preferences || '{}').preferred_voice || 'alloy'}
+                                value={prefVoice}
+                                onChange={e => setPrefVoice(e.target.value)}
                                 style={{ marginLeft: '10px' }}
                             >
                                 <optgroup label="OpenAI">
@@ -125,30 +193,12 @@ export default function AdminUsers() {
                                 </optgroup>
                             </select>
                         </label>
-                        <button onClick={async () => {
-                            const address = (document.getElementById('pref-address') as HTMLInputElement).value;
-                            const voice = (document.getElementById('pref-voice') as HTMLSelectElement).value;
-
-                            try {
-                                const res = await fetch(`/api/admin/users/${selectedUser.account.id}/preferences`, {
-                                    method: 'PATCH',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                        preferred_address: address,
-                                        preferred_voice: voice
-                                    })
-                                });
-                                if (res.ok) {
-                                    alert('Saved!');
-                                    fetchUserDetails(selectedUser.account.id);
-                                } else {
-                                    alert('Error saving');
-                                }
-                            } catch (e) {
-                                console.error(e);
-                                alert('Error saving');
-                            }
-                        }}>Save Preferences</button>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={handleSavePrefs}>Save Preferences</button>
+                            <button onClick={handleTestVoice} disabled={testingVoice}>
+                                {testingVoice ? 'Generating...' : 'Test Voice'}
+                            </button>
+                        </div>
                     </div>
 
                     <button onClick={() => setSelectedUser(null)} style={{ marginTop: '10px' }}>Close</button>
