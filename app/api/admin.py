@@ -434,3 +434,19 @@ def save_beginner_rules(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save rules: {str(e)}")
 
+@router.post("/fix-db-schema")
+def fix_db_schema(
+    current_user: UserAccount = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    try:
+        from update_db import update_schema
+        # Capture stdout? For now just run it.
+        # We can modify update_schema to return logs, but let's just run it.
+        update_schema()
+        return {"status": "ok", "message": "Schema update executed. Check logs if issues persist."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Schema update failed: {str(e)}")
+
