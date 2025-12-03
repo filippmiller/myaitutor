@@ -21,7 +21,6 @@ interface Referral {
 export default function AdminBilling() {
     const [packages, setPackages] = useState<BillingPackage[]>([]);
     const [referrals, setReferrals] = useState<Referral[]>([]);
-    const [loading, setLoading] = useState(false);
 
     // New Package State
     const [newPkg, setNewPkg] = useState<Partial<BillingPackage>>({
@@ -38,7 +37,6 @@ export default function AdminBilling() {
     }, []);
 
     const fetchPackages = async () => {
-        setLoading(true);
         try {
             const res = await fetch('/api/billing/packages');
             if (res.ok) {
@@ -47,8 +45,6 @@ export default function AdminBilling() {
             }
         } catch (e) {
             console.error(e);
-        } finally {
-            setLoading(false);
         }
     };
 
@@ -95,7 +91,6 @@ export default function AdminBilling() {
     return (
         <div>
             <h3>Billing Management</h3>
-            {loading && <p>Loading...</p>}
 
             <div style={{ marginBottom: '30px', padding: '20px', background: '#2a2a2a', borderRadius: '8px' }}>
                 <h4>Deposit Packages</h4>
