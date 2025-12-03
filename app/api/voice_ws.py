@@ -35,6 +35,7 @@ async def echo_websocket(websocket: WebSocket):
 async def voice_websocket(websocket: WebSocket):
     await websocket.accept()
     logger.info(f"WebSocket connection accepted from {websocket.client}")
+    logger.info("Voice WS Version: 2025-12-03 Fix Datetime")
     
     # Manually create session
     from app.database import engine
