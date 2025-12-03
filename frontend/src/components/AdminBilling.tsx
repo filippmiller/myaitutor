@@ -95,6 +95,7 @@ export default function AdminBilling() {
     return (
         <div>
             <h3>Billing Management</h3>
+            {loading && <p>Loading...</p>}
 
             <div style={{ marginBottom: '30px', padding: '20px', background: '#2a2a2a', borderRadius: '8px' }}>
                 <h4>Deposit Packages</h4>
