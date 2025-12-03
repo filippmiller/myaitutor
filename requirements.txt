@@ -17,3 +17,5 @@ yandexcloud
 grpcio
 grpcio-tools
 websockets
+
+alembic

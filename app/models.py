@@ -41,6 +41,9 @@ class UserProfile(SQLModel, table=True):
     preferred_tts_engine: str = Field(default="openai")
     preferred_stt_engine: str = Field(default="openai")
     preferred_voice_id: Optional[str] = Field(default=None)
+    
+    # Billing Cache
+    minutes_balance: int = Field(default=0)
 
     
     # Relationship to UserState
@@ -148,4 +151,61 @@ class AuthSession(SQLModel, table=True):
     is_revoked: bool = Field(default=False)
     user_agent: Optional[str] = Field(default=None, nullable=True)
     ip_address: Optional[str] = Field(default=None, nullable=True)
+
+
+# --- Billing Models ---
+
+from decimal import Decimal
+from sqlalchemy import Column, Numeric
+
+class BillingPackage(SQLModel, table=True):
+    __tablename__ = "billing_packages"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    min_amount_rub: Decimal = Field(sa_column=Column(Numeric(10, 2)))
+    discount_percent: int
+    description: Optional[str] = None
+    is_active: bool = Field(default=True)
+    sort_order: int = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class WalletTransaction(SQLModel, table=True):
+    __tablename__ = "wallet_transactions"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_account_id: int = Field(foreign_key="user_accounts.id", index=True)
+    type: str # deposit, trial, gift, usage, referral_reward, referral_welcome, adjustment
+    amount_rub: Optional[Decimal] = Field(default=None, sa_column=Column(Numeric(10, 2)))
+    minutes_delta: int
+    source: Optional[str] = None
+    source_ref: Optional[str] = None
+    reason: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Optional: Relationship to UserAccount if needed
+    # user: Optional["UserAccount"] = Relationship(back_populates="transactions")
+
+class UsageSession(SQLModel, table=True):
+    __tablename__ = "usage_sessions"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_account_id: int = Field(foreign_key="user_accounts.id", index=True)
+    started_at: datetime
+    ended_at: datetime
+    duration_sec: int
+    billed_minutes: int
+    billed_amount_rub: Decimal = Field(sa_column=Column(Numeric(10, 2)))
+    billing_status: str # pending, billed, free, failed
+    tariff_snapshot: Optional[str] = None # JSON string
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Referral(SQLModel, table=True):
+    __tablename__ = "referrals"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    referrer_user_id: int = Field(foreign_key="user_accounts.id", index=True)
+    referred_user_id: int = Field(foreign_key="user_accounts.id", index=True)
+    referral_code: str = Field(index=True)
+    status: str # pending, rewarded, blocked
+    reward_minutes_for_referrer: int = Field(default=60)
+    reward_minutes_for_referred: int = Field(default=60)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    rewarded_at: Optional[datetime] = None
 

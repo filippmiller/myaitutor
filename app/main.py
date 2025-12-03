@@ -31,6 +31,10 @@ app.include_router(voice_ws.router, prefix="/api", tags=["voice_ws"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(progress.router, prefix="/api/progress", tags=["progress"])
 
+from app.api.routes import billing, admin_billing
+app.include_router(billing.router, prefix="/api/billing", tags=["billing"])
+app.include_router(admin_billing.router, prefix="/api/admin/billing", tags=["admin_billing"])
+
 # Static files (Audio)
 os.makedirs("static/audio", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")

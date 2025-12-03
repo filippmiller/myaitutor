@@ -10,11 +10,15 @@ from app.services.auth_service import create_session_for_user, set_session_cooki
 
 router = APIRouter()
 
+from app.services.billing_service import BillingService
+from app.services.referral_service import ReferralService
+
 # Schemas
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: Optional[str] = None
+    referral_code: Optional[str] = None
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -69,6 +73,25 @@ def register(
         )
         db.add(new_profile)
         db.commit()
+        
+        # --- Billing & Referral Logic ---
+        billing_service = BillingService(db)
+        referral_service = ReferralService(db)
+        
+        # 1. Give 60 free minutes
+        billing_service.create_trial_bonus(new_user.id)
+        
+        # 2. Process referral if code provided
+        if data.referral_code:
+            referral_service.process_referral_signup(new_user.id, data.referral_code)
+            
+        # 3. Generate own referral code (optional, but good to have ready)
+        # referral_service.generate_referral_code(new_user.id) 
+        
+        # Create Session for immediate login
+        session = create_session_for_user(db, new_user, request)
+        access_token = create_access_token(subject=str(new_user.id))
+        set_session_cookie(response, session.id, session.expires_at)
         
         return AuthResponse(
             user=UserAccountRead.from_orm(new_user),
