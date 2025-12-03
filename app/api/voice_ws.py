@@ -165,6 +165,7 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
 
     # Build System Prompt
     system_instructions = build_tutor_system_prompt(session, profile, lesson_session_id=lesson_session.id)
+    logger.info(f"System Instructions (First 200 chars): {system_instructions[:200]}")
 
     # 1. Connect to OpenAI
     url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
@@ -321,15 +322,15 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
             asyncio.create_task(openai_to_frontend())
         ]
         
-        # Send initial greeting trigger?
-        # Realtime API doesn't auto-greet unless instructed.
-        # We can send a text item to trigger response.
+        # Send initial greeting trigger
+        # We explicitly tell the model to start the lesson.
+        logger.info("Sending initial trigger message...")
         await openai_ws.send(json.dumps({
             "type": "conversation.item.create",
             "item": {
                 "type": "message",
                 "role": "user",
-                "content": [{"type": "input_text", "text": "Hello, I am ready for the lesson."}]
+                "content": [{"type": "input_text", "text": "Start the lesson now. Greet me."}]
             }
         }))
         await openai_ws.send(json.dumps({"type": "response.create"}))
