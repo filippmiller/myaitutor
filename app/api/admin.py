@@ -240,4 +240,109 @@ def update_system_rule(
     session.refresh(rule)
     return rule
 
+# Voice Management Endpoints
+
+@router.get("/voices")
+def list_voices():
+    return {
+        "openai": [
+            {"id": "alloy", "name": "Alloy", "gender": "neutral"},
+            {"id": "echo", "name": "Echo", "gender": "male"},
+            {"id": "fable", "name": "Fable", "gender": "neutral"},
+            {"id": "onyx", "name": "Onyx", "gender": "male"},
+            {"id": "nova", "name": "Nova", "gender": "female"},
+            {"id": "shimmer", "name": "Shimmer", "gender": "female"},
+        ],
+        "yandex": [
+            {"id": "alisa", "name": "Alisa", "gender": "female"},
+            {"id": "alena", "name": "Alena", "gender": "female"},
+            {"id": "filipp", "name": "Filipp", "gender": "male"},
+            {"id": "jane", "name": "Jane", "gender": "female"},
+            {"id": "madirus", "name": "Madirus", "gender": "male"},
+            {"id": "omazh", "name": "Omazh", "gender": "female"},
+            {"id": "zahar", "name": "Zahar", "gender": "male"},
+            {"id": "ermil", "name": "Ermil", "gender": "male"},
+        ]
+    }
+
+class VoiceTestRequest(BaseModel):
+    engine: str
+    voice_id: str
+    text: str = "Hello, this is a test of the selected voice."
+
+@router.post("/voices/test")
+async def test_voice_new(
+    data: VoiceTestRequest,
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    settings = session.get(AppSettings, 1)
+    api_key = settings.openai_api_key if settings else None
+    
+    from app.services.voice_engine import get_voice_engine
+    import uuid
+    import os
+    from fastapi.responses import FileResponse
+    
+    try:
+        engine = get_voice_engine(data.engine, api_key=api_key)
+        audio_bytes = await engine.synthesize(data.text, voice_id=data.voice_id)
+        
+        # Save to temp file
+        temp_filename = f"static/audio/test_{uuid.uuid4()}.mp3"
+        os.makedirs("static/audio", exist_ok=True)
+        full_path = os.path.join(os.getcwd(), temp_filename)
+        
+        with open(full_path, "wb") as f:
+            f.write(audio_bytes)
+            
+        return FileResponse(full_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class UserVoiceSettings(BaseModel):
+    preferred_tts_engine: str
+    preferred_stt_engine: str
+    preferred_voice_id: str
+
+@router.post("/users/{user_id}/voice")
+def save_user_voice(
+    user_id: int,
+    data: UserVoiceSettings,
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    user = session.get(UserAccount, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    profile = session.exec(select(UserProfile).where(UserProfile.user_account_id == user.id)).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    profile.preferred_tts_engine = data.preferred_tts_engine
+    profile.preferred_stt_engine = data.preferred_stt_engine
+    profile.preferred_voice_id = data.preferred_voice_id
+    
+    # Sync with JSON preferences for backward compatibility/frontend ease if needed
+    import json
+    try:
+        prefs = json.loads(profile.preferences)
+    except:
+        prefs = {}
+    prefs["preferred_voice"] = data.preferred_voice_id # Legacy field
+    profile.preferences = json.dumps(prefs)
+    
+    session.add(profile)
+    session.commit()
+    session.refresh(profile)
+    
+    return profile
+
 

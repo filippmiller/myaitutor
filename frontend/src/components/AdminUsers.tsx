@@ -14,32 +14,43 @@ interface UserProfile {
     name: string;
     english_level: string;
     preferences: string;
+    preferred_tts_engine?: string;
+    preferred_stt_engine?: string;
+    preferred_voice_id?: string;
+}
+
+interface Voice {
+    id: string;
+    name: string;
+    gender: string;
+}
+
+interface VoicesResponse {
+    openai: Voice[];
+    yandex: Voice[];
 }
 
 export default function AdminUsers() {
     const [users, setUsers] = useState<User[]>([]);
     const [selectedUser, setSelectedUser] = useState<{ account: User, profile: UserProfile } | null>(null);
     const [loading, setLoading] = useState(false);
+    const [voices, setVoices] = useState<VoicesResponse>({ openai: [], yandex: [] });
 
-    // Preference state
-    const [prefAddress, setPrefAddress] = useState('');
-    const [prefVoice, setPrefVoice] = useState('alloy');
+    // Voice Settings State
+    const [ttsEngine, setTtsEngine] = useState('openai');
+    const [voiceId, setVoiceId] = useState('alloy');
     const [testingVoice, setTestingVoice] = useState(false);
+    const [sampleText, setSampleText] = useState('Hello, this is a test of the selected voice.');
 
     useEffect(() => {
         fetchUsers();
+        fetchVoices();
     }, []);
 
     useEffect(() => {
         if (selectedUser && selectedUser.profile) {
-            try {
-                const p = JSON.parse(selectedUser.profile.preferences || '{}');
-                setPrefAddress(p.preferred_address || '');
-                setPrefVoice(p.preferred_voice || 'alloy');
-            } catch (e) {
-                setPrefAddress('');
-                setPrefVoice('alloy');
-            }
+            setTtsEngine(selectedUser.profile.preferred_tts_engine || 'openai');
+            setVoiceId(selectedUser.profile.preferred_voice_id || 'alloy');
         }
     }, [selectedUser]);
 
@@ -58,6 +69,18 @@ export default function AdminUsers() {
         }
     };
 
+    const fetchVoices = async () => {
+        try {
+            const res = await fetch('/api/admin/voices');
+            if (res.ok) {
+                const data = await res.json();
+                setVoices(data);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
     const fetchUserDetails = async (id: number) => {
         try {
             const res = await fetch(`/api/admin/users/${id}`);
@@ -70,38 +93,40 @@ export default function AdminUsers() {
         }
     };
 
-    const handleSavePrefs = async () => {
+    const handleSaveVoice = async () => {
         if (!selectedUser) return;
         try {
-            const res = await fetch(`/api/admin/users/${selectedUser.account.id}/preferences`, {
-                method: 'PATCH',
+            const res = await fetch(`/api/admin/users/${selectedUser.account.id}/voice`, {
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    preferred_address: prefAddress,
-                    preferred_voice: prefVoice
+                    preferred_tts_engine: ttsEngine,
+                    preferred_stt_engine: ttsEngine, // Sync STT with TTS for now as per prompt "default OpenAI for both"
+                    preferred_voice_id: voiceId
                 })
             });
             if (res.ok) {
-                alert('Saved!');
+                alert('Voice settings saved!');
                 fetchUserDetails(selectedUser.account.id);
             } else {
-                alert('Error saving');
+                alert('Error saving voice settings');
             }
         } catch (e) {
             console.error(e);
-            alert('Error saving');
+            alert('Error saving voice settings');
         }
     };
 
     const handleTestVoice = async () => {
         setTestingVoice(true);
         try {
-            const res = await fetch('/api/admin/test-voice-gen', {
+            const res = await fetch('/api/admin/voices/test', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    text: "Hello, this is a test of the selected voice.",
-                    voice: prefVoice
+                    engine: ttsEngine,
+                    voice_id: voiceId,
+                    text: sampleText
                 })
             });
             if (res.ok) {
@@ -120,6 +145,8 @@ export default function AdminUsers() {
             setTestingVoice(false);
         }
     };
+
+    const availableVoices = ttsEngine === 'openai' ? voices.openai : voices.yandex;
 
     return (
         <div>
@@ -156,46 +183,50 @@ export default function AdminUsers() {
                     <p><strong>Level:</strong> {selectedUser.profile?.english_level}</p>
 
                     <div style={{ marginTop: '1rem', padding: '1rem', background: '#333', borderRadius: '4px' }}>
-                        <h5>Preferences</h5>
+                        <h5>Voice Settings</h5>
+
                         <label style={{ display: 'block', marginBottom: '10px' }}>
-                            Address as:
-                            <input
-                                type="text"
-                                placeholder="e.g. My Lord"
-                                value={prefAddress}
-                                onChange={e => setPrefAddress(e.target.value)}
+                            Engine:
+                            <select
+                                value={ttsEngine}
+                                onChange={e => {
+                                    setTtsEngine(e.target.value);
+                                    // Reset voice ID to first available when engine changes
+                                    const newVoices = e.target.value === 'openai' ? voices.openai : voices.yandex;
+                                    if (newVoices.length > 0) setVoiceId(newVoices[0].id);
+                                }}
                                 style={{ marginLeft: '10px' }}
-                            />
+                            >
+                                <option value="openai">OpenAI</option>
+                                <option value="yandex">Yandex</option>
+                            </select>
                         </label>
+
                         <label style={{ display: 'block', marginBottom: '10px' }}>
                             Voice:
                             <select
-                                value={prefVoice}
-                                onChange={e => setPrefVoice(e.target.value)}
+                                value={voiceId}
+                                onChange={e => setVoiceId(e.target.value)}
                                 style={{ marginLeft: '10px' }}
                             >
-                                <optgroup label="OpenAI">
-                                    <option value="alloy">Alloy</option>
-                                    <option value="echo">Echo</option>
-                                    <option value="fable">Fable</option>
-                                    <option value="onyx">Onyx</option>
-                                    <option value="nova">Nova</option>
-                                    <option value="shimmer">Shimmer</option>
-                                </optgroup>
-                                <optgroup label="Yandex">
-                                    <option value="alisa">Alisa (Yandex)</option>
-                                    <option value="alena">Alena (Yandex)</option>
-                                    <option value="filipp">Filipp (Yandex)</option>
-                                    <option value="jane">Jane (Yandex)</option>
-                                    <option value="madirus">Madirus (Yandex)</option>
-                                    <option value="omazh">Omazh (Yandex)</option>
-                                    <option value="zahar">Zahar (Yandex)</option>
-                                    <option value="ermil">Ermil (Yandex)</option>
-                                </optgroup>
+                                {availableVoices.map(v => (
+                                    <option key={v.id} value={v.id}>{v.name} ({v.gender})</option>
+                                ))}
                             </select>
                         </label>
+
+                        <label style={{ display: 'block', marginBottom: '10px' }}>
+                            Test Text:
+                            <input
+                                type="text"
+                                value={sampleText}
+                                onChange={e => setSampleText(e.target.value)}
+                                style={{ marginLeft: '10px' }}
+                            />
+                        </label>
+
                         <div style={{ display: 'flex', gap: '10px' }}>
-                            <button onClick={handleSavePrefs}>Save Preferences</button>
+                            <button onClick={handleSaveVoice}>Save Voice Settings</button>
                             <button onClick={handleTestVoice} disabled={testingVoice}>
                                 {testingVoice ? 'Generating...' : 'Test Voice'}
                             </button>

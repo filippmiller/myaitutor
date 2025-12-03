@@ -37,6 +37,12 @@ class UserProfile(SQLModel, table=True):
     pains: Optional[str] = None
     preferences: str = Field(default="{}") # JSON: { "preferred_address": "...", "preferred_voice": "..." }
     
+    # Voice Settings
+    preferred_tts_engine: str = Field(default="openai")
+    preferred_stt_engine: str = Field(default="openai")
+    preferred_voice_id: Optional[str] = Field(default=None)
+
+    
     # Relationship to UserState
     state: Optional["UserState"] = Relationship(back_populates="user")
     messages: List["SessionMessage"] = Relationship(back_populates="user")
