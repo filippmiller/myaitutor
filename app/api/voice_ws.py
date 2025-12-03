@@ -120,7 +120,7 @@ async def voice_websocket(websocket: WebSocket):
         if use_realtime:
             try:
                 logger.info("Attempting OpenAI Realtime Session...")
-                await run_realtime_session(websocket, api_key, voice_id, profile)
+                await run_realtime_session(websocket, api_key, voice_id, profile, session)
                 return # If successful and finishes normally
             except Exception as e:
                 logger.error(f"Realtime Session failed: {e}", exc_info=True)
@@ -140,16 +140,31 @@ async def voice_websocket(websocket: WebSocket):
         logger.info("Cleanup complete")
 
 
-async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str, profile: UserProfile | None):
+async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str, profile: UserProfile | None, session: Session):
     """
     Manages a session with OpenAI Realtime API.
     """
     import subprocess
     import shutil
+    from datetime import datetime
     
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
         raise RuntimeError("ffmpeg not found")
+
+    # Create LessonSession
+    lesson_session = LessonSession(
+        user_account_id=profile.user_account_id if profile else None,
+        started_at=datetime.utcnow(),
+        language_mode=None # Will be set by interaction
+    )
+    session.add(lesson_session)
+    session.commit()
+    session.refresh(lesson_session)
+    logger.info(f"Created Realtime LessonSession {lesson_session.id}")
+
+    # Build System Prompt
+    system_instructions = build_tutor_system_prompt(session, profile, lesson_session_id=lesson_session.id)
 
     # 1. Connect to OpenAI
     url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
@@ -162,15 +177,6 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
         logger.info("Connected to OpenAI Realtime API")
         
         # 2. Configure Session
-        user_name = profile.name if profile else "Student"
-        system_instructions = (
-            f"You are a helpful English tutor for a Russian speaker named {user_name}. "
-            "The user might speak a mix of English and Russian. "
-            "Always respond in English to help them practice, unless they explicitly ask for an explanation in Russian. "
-            "Be patient, friendly, and concise. "
-            "Do not translate everything, just reply naturally."
-        )
-        
         session_update = {
             "type": "session.update",
             "session": {
@@ -181,7 +187,7 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                 "output_audio_format": "pcm16",
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.5,
+                    "threshold": 0.3, # Lowered from 0.5 for better sensitivity
                     "prefix_padding_ms": 300,
                     "silence_duration_ms": 500
                 }
@@ -273,6 +279,34 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         if transcript:
                             await websocket.send_json({"type": "transcript", "role": "user", "text": transcript})
                             
+                    elif event_type == "response.output_item.done":
+                        # Item done, check for markers in transcript
+                        item = event.get("item", {})
+                        content = item.get("content", [])
+                        if content:
+                            for part in content:
+                                if part.get("type") == "audio" and "transcript" in part:
+                                    transcript = part["transcript"]
+                                    if transcript:
+                                        # Check for language mode markers
+                                        marker = parse_language_mode_marker(transcript)
+                                        if marker:
+                                            mode, level_change = marker
+                                            if mode:
+                                                lesson_session.language_mode = mode
+                                                lesson_session.language_chosen_at = datetime.utcnow()
+                                                if mode == "MIXED":
+                                                    lesson_session.language_level = 1
+                                                session.add(lesson_session)
+                                                session.commit()
+                                                logger.info(f"Realtime: Language mode set to {mode}")
+                                            elif level_change == "LEVEL_UP":
+                                                if lesson_session.language_level:
+                                                    lesson_session.language_level = min(lesson_session.language_level + 1, 5)
+                                                    session.add(lesson_session)
+                                                    session.commit()
+                                                    logger.info(f"Realtime: Language level increased to {lesson_session.language_level}")
+
                     elif event_type == "error":
                         logger.error(f"OpenAI Realtime Error: {event}")
                         
