@@ -35,6 +35,9 @@ def build_tutor_system_prompt(session: Session, user: UserProfile, lesson_sessio
     Returns:
         Complete system prompt string
     """
+    if not user:
+        return "You are an English tutor. The user profile could not be loaded, so please be polite and ask for their name."
+
     # 1. Fetch Legacy System Rules (backward compatibility)
     legacy_rules = session.exec(select(TutorSystemRule).where(TutorSystemRule.enabled == True).order_by(TutorSystemRule.sort_order)).all()
     

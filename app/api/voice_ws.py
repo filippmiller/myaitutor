@@ -124,11 +124,16 @@ async def voice_websocket(websocket: WebSocket):
                 return # If successful and finishes normally
             except Exception as e:
                 logger.error(f"Realtime Session failed: {e}", exc_info=True)
-                await websocket.send_json({"type": "system", "level": "warning", "message": "Realtime connection failed. Switching to standard mode."})
+                await websocket.send_json({"type": "system", "level": "warning", "message": f"Realtime connection failed: {str(e)}. Switching to standard mode."})
                 # Fall through to legacy
         
         # 3. Legacy Session (Whisper/Yandex)
         logger.info("Starting Legacy Session (Whisper/Yandex)...")
+        if not profile:
+             logger.warning("No user profile found, using default settings for legacy session.")
+             # Create a dummy/default profile if needed or handle inside run_legacy_session
+             # For now, we'll let it proceed but we should be aware.
+             
         await run_legacy_session(websocket, api_key, tts_engine_name, voice_id, profile, settings, session)
 
     except WebSocketDisconnect:
