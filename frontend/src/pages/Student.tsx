@@ -36,6 +36,11 @@ export default function Student() {
     const chatEndRef = useRef<HTMLDivElement | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
 
+    // Audio Queue Management
+    const audioQueueRef = useRef<Blob[]>([]);
+    const isPlayingRef = useRef(false);
+    const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
     const handleAuthError = async (res: Response) => {
         if (res.status === 401) {
             await logout();
@@ -143,7 +148,7 @@ export default function Student() {
                 if (event.data instanceof Blob) {
                     // Binary message = Audio
                     console.log(`🔊 [AUDIO] Received ${event.data.size} bytes`);
-                    playAudio(event.data);
+                    queueAudio(event.data);
                 } else {
                     // Text message = JSON
                     try {
@@ -152,6 +157,13 @@ export default function Student() {
 
                         if (msg.type === 'transcript') {
                             console.log(`💬 [TRANSCRIPT] ${msg.role}: ${msg.text}`);
+
+                            // If user spoke, stop any current AI speech immediately
+                            if (msg.role === 'user') {
+                                console.log('🛑 [AUDIO] User spoke, stopping AI playback');
+                                stopAudioPlayback();
+                            }
+
                             setTranscript(prev => [...prev, { role: msg.role, text: msg.text }]);
                         } else if (msg.type === 'system') {
                             console.log(`[SYSTEM] ${msg.level}: ${msg.message}`);
@@ -207,12 +219,43 @@ export default function Student() {
             wsRef.current.close();
         }
         stopMediaRecorder();
+        stopAudioPlayback();
         setIsRecording(false);
         setConnectionStatus('Disconnected');
     };
 
-    const playAudio = async (blob: Blob) => {
-        if (!audioContextRef.current) return;
+    const stopAudioPlayback = () => {
+        if (currentSourceRef.current) {
+            try {
+                currentSourceRef.current.stop();
+            } catch (e) {
+                // ignore
+            }
+            currentSourceRef.current = null;
+        }
+        audioQueueRef.current = [];
+        isPlayingRef.current = false;
+    };
+
+    const queueAudio = (blob: Blob) => {
+        audioQueueRef.current.push(blob);
+        playNextInQueue();
+    };
+
+    const playNextInQueue = async () => {
+        if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
+
+        isPlayingRef.current = true;
+        const blob = audioQueueRef.current.shift();
+
+        if (!blob) {
+            isPlayingRef.current = false;
+            return;
+        }
+
+        if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
 
         try {
             const arrayBuffer = await blob.arrayBuffer();
@@ -220,9 +263,18 @@ export default function Student() {
             const source = audioContextRef.current.createBufferSource();
             source.buffer = audioBuffer;
             source.connect(audioContextRef.current.destination);
+
+            source.onended = () => {
+                isPlayingRef.current = false;
+                playNextInQueue();
+            };
+
+            currentSourceRef.current = source;
             source.start(0);
         } catch (e) {
             console.error('❌ [AUDIO] Playback failed:', e);
+            isPlayingRef.current = false;
+            playNextInQueue();
         }
     };
 
