@@ -54,6 +54,21 @@ def test_openai(session: Session = Depends(get_session)):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@router.post("/test-ffmpeg")
+def test_ffmpeg(session: Session = Depends(get_session)):
+    import shutil
+    import subprocess
+    
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        return {"status": "error", "message": "ffmpeg not found in PATH"}
+        
+    try:
+        result = subprocess.run([ffmpeg_path, "-version"], capture_output=True, text=True)
+        return {"status": "ok", "message": f"ffmpeg found: {result.stdout.splitlines()[0]}"}
+    except Exception as e:
+        return {"status": "error", "message": f"ffmpeg execution failed: {str(e)}"}
+
 @router.get("/users")
 def list_users(
     offset: int = 0, 

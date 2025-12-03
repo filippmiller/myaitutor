@@ -17,6 +17,7 @@ interface UserProfile {
     preferred_tts_engine?: string;
     preferred_stt_engine?: string;
     preferred_voice_id?: string;
+    minutes_balance?: number;
 }
 
 interface Voice {
@@ -86,10 +87,15 @@ export default function AdminUsers() {
             const res = await fetch(`/api/admin/users/${id}`);
             if (res.ok) {
                 const data = await res.json();
+                console.log("User details:", data);
                 setSelectedUser(data);
+            } else {
+                const err = await res.json();
+                alert(`Error fetching user details: ${err.detail || res.statusText}`);
             }
         } catch (e) {
             console.error(e);
+            alert(`Error fetching user details: ${e}`);
         }
     };
 
@@ -182,6 +188,7 @@ export default function AdminUsers() {
                 <div style={{ padding: '1rem', border: '1px solid #ccc', borderRadius: '4px', background: '#2a2a2a', marginTop: '20px' }}>
                     <h4>User Details: {selectedUser.account.email}</h4>
                     <p><strong>Level:</strong> {selectedUser.profile?.english_level}</p>
+                    <p><strong>Minutes Balance:</strong> {selectedUser.profile?.minutes_balance ?? 0}</p>
 
                     <div style={{ marginTop: '1rem', padding: '1rem', background: '#333', borderRadius: '4px' }}>
                         <h5>Voice Settings</h5>

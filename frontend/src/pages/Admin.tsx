@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import TokensPanel from '../components/TokensPanel';
 import AdminUsers from '../components/AdminUsers';
 import AdminRules from '../components/AdminRules';
+import AdminBilling from '../components/AdminBilling';
 
 export default function Admin() {
     const [activeTab, setActiveTab] = useState('settings');
@@ -68,6 +69,12 @@ export default function Admin() {
                 >
                     System Rules
                 </button>
+                <button
+                    onClick={() => setActiveTab('billing')}
+                    style={{ background: activeTab === 'billing' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px' }}
+                >
+                    Billing
+                </button>
             </div>
 
             {activeTab === 'settings' && (
@@ -94,6 +101,16 @@ export default function Admin() {
                             </select>
                         </label>
                         <button onClick={testOpenAI} style={{ marginRight: '10px' }}>Test OpenAI</button>
+                        <button onClick={async () => {
+                            setTestResult('Testing FFmpeg...');
+                            try {
+                                const res = await fetch('/api/admin/test-ffmpeg', { method: 'POST' });
+                                const data = await res.json();
+                                setTestResult(`FFmpeg: ${data.status} - ${data.message}`);
+                            } catch (e) {
+                                setTestResult('FFmpeg Test Failed');
+                            }
+                        }}>Test FFmpeg</button>
                     </div>
 
                     <div style={{ marginTop: '20px', borderTop: '1px solid #ccc', paddingTop: '20px' }}>
@@ -113,6 +130,7 @@ export default function Admin() {
 
             {activeTab === 'users' && <AdminUsers />}
             {activeTab === 'rules' && <AdminRules />}
+            {activeTab === 'billing' && <AdminBilling />}
         </div>
     );
 }
