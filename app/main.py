@@ -38,6 +38,12 @@ app.include_router(admin_billing.router, prefix="/api/admin/billing", tags=["adm
 from app.api.routes import admin_analytics
 app.include_router(admin_analytics.router, prefix="/api/admin/analytics", tags=["admin_analytics"])
 
+from app.api.routes import admin_ai_routes
+app.include_router(admin_ai_routes.router, prefix="/api/admin/ai", tags=["admin_ai"])
+
+from app.api.routes import lesson_routes
+app.include_router(lesson_routes.router, prefix="/api", tags=["lessons"])
+
 # Static files (Audio)
 os.makedirs("static/audio", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")

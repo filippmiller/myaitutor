@@ -20,6 +20,12 @@ class LessonSession(SQLModel, table=True):
     ended_at: Optional[datetime] = None
     duration_seconds: Optional[int] = None
     status: str = Field(default="active") # active, completed, error
+    
+    # Language Mode Selection (for session-specific language preferences)
+    language_mode: Optional[str] = Field(default=None)  # EN_ONLY, RU_ONLY, MIXED
+    language_level: Optional[int] = Field(default=None)  # 1-5 scale for English intensity in MIXED mode
+    language_chosen_at: Optional[datetime] = Field(default=None)
+
 
 class LessonTurn(SQLModel, table=True):
     __tablename__ = "lesson_turns"
@@ -209,3 +215,58 @@ class Referral(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     rewarded_at: Optional[datetime] = None
 
+
+# --- AI Admin Assistant Models ---
+
+class TutorRule(SQLModel, table=True):
+    __tablename__ = "tutor_rules"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scope: str = Field(index=True)  # "global" | "app" | "student" | "session"
+    type: str  # "greeting" | "toxicity_warning" | "difficulty_adjustment" | "other"
+    title: str
+    description: str
+    trigger_condition: Optional[str] = None  # JSON string
+    action: Optional[str] = None  # JSON string
+    priority: int = Field(default=0)
+    is_active: bool = Field(default=True, index=True)
+    applies_to_student_id: Optional[int] = Field(default=None, foreign_key="user_accounts.id", index=True)
+    applies_to_app_version: Optional[str] = None
+    created_by: str  # "ai_admin" | "human_admin"
+    updated_by: str  # "ai_admin" | "human_admin"
+    source: str  # "ai_admin" | "manual"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class TutorRuleVersion(SQLModel, table=True):
+    __tablename__ = "tutor_rule_versions"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    rule_id: int = Field(foreign_key="tutor_rules.id", index=True)
+    # Snapshot fields
+    scope: str
+    type: str
+    title: str
+    description: str
+    trigger_condition: Optional[str] = None
+    action: Optional[str] = None
+    priority: int
+    is_active: bool
+    # Audit fields
+    changed_by: str
+    change_reason: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class AdminAIConversation(SQLModel, table=True):
+    __tablename__ = "admin_ai_conversations"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    admin_user_id: int = Field(foreign_key="user_accounts.id", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    status: str = Field(default="open")  # "open" | "closed"
+
+class AdminAIMessage(SQLModel, table=True):
+    __tablename__ = "admin_ai_messages"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    conversation_id: int = Field(foreign_key="admin_ai_conversations.id", index=True)
+    sender: str  # "human" | "ai"
+    message_type: str = Field(default="text")  # "text" | "system" | "rule_change_summary"
+    content: str  # Can be JSON for structured messages
+    created_at: datetime = Field(default_factory=datetime.utcnow)

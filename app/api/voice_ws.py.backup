@@ -14,11 +14,9 @@ from sqlmodel import Session, select
 import websockets
 
 from app.database import get_session
-from app.models import AppSettings, UserAccount, UserProfile, AuthSession, LessonSession
+from app.models import AppSettings, UserAccount, UserProfile, AuthSession
 from app.services.yandex_service import YandexService, AudioConverter
 from app.services.voice_engine import get_voice_engine
-from app.services.tutor_service import build_tutor_system_prompt
-from app.services.language_utils import parse_language_mode_marker, strip_language_markers
 
 from collections import deque
 
@@ -129,7 +127,7 @@ async def voice_websocket(websocket: WebSocket):
         
         # 3. Legacy Session (Whisper/Yandex)
         logger.info("Starting Legacy Session (Whisper/Yandex)...")
-        await run_legacy_session(websocket, api_key, tts_engine_name, voice_id, profile, settings, session)
+        await run_legacy_session(websocket, api_key, tts_engine_name, voice_id, profile, settings)
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
@@ -303,7 +301,7 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
         await asyncio.gather(*tasks)
 
 
-async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name: str, voice_id: str, profile: UserProfile | None, settings: AppSettings, session: Session):
+async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name: str, voice_id: str, profile: UserProfile | None, settings: AppSettings):
     """
     Legacy implementation using VAD + Whisper + TTS (OpenAI/Yandex).
     """
@@ -317,24 +315,13 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
         await websocket.close(code=1011)
         return
 
-    # Create LessonSession
-    from datetime import datetime
-    lesson_session = LessonSession(
-        user_account_id=profile.user_account_id if profile else None,
-        started_at=datetime.utcnow(),
-        language_mode=None # Will be set by interaction
-    )
-    session.add(lesson_session)
-    session.commit()
-    session.refresh(lesson_session)
-    logger.info(f"Created LessonSession {lesson_session.id}")
-
-    # Build System Prompt
-    system_prompt = build_tutor_system_prompt(session, profile, lesson_session_id=lesson_session.id)
-
     # State
     conversation_history = [
-        {"role": "system", "content": system_prompt}
+        {"role": "system", "content": (
+            "You are a helpful English tutor for a Russian speaker. "
+            "Always respond in English to help them practice. "
+            "Keep your answers concise."
+        )}
     ]
     
     # VAD State
@@ -396,40 +383,15 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                     curr_sent += content
                     # Simple sentence splitting
                     if re.search(r'[.!?]\s', curr_sent):
-                        # Strip markers before sending to user
-                        clean_sent = strip_language_markers(curr_sent)
-                        if clean_sent.strip():
-                            await websocket.send_json({"type": "transcript", "role": "assistant", "text": clean_sent})
-                            await synthesize_and_send(clean_sent)
+                        await websocket.send_json({"type": "transcript", "role": "assistant", "text": curr_sent})
+                        await synthesize_and_send(curr_sent)
                         curr_sent = ""
             
-            # Handle remaining text
             if curr_sent:
-                clean_sent = strip_language_markers(curr_sent)
-                if clean_sent.strip():
-                    await websocket.send_json({"type": "transcript", "role": "assistant", "text": clean_sent})
-                    await synthesize_and_send(clean_sent)
+                await websocket.send_json({"type": "transcript", "role": "assistant", "text": curr_sent})
+                await synthesize_and_send(curr_sent)
                 
             conversation_history.append({"role": "assistant", "content": full_resp})
-            
-            # Check for language mode markers
-            marker = parse_language_mode_marker(full_resp)
-            if marker:
-                mode, level_change = marker
-                if mode:
-                    lesson_session.language_mode = mode
-                    lesson_session.language_chosen_at = datetime.utcnow()
-                    if mode == "MIXED":
-                        lesson_session.language_level = 1
-                    session.add(lesson_session)
-                    session.commit()
-                    logger.info(f"Language mode set to {mode} for session {lesson_session.id}")
-                elif level_change == "LEVEL_UP":
-                    if lesson_session.language_level:
-                        lesson_session.language_level = min(lesson_session.language_level + 1, 5)
-                        session.add(lesson_session)
-                        session.commit()
-                        logger.info(f"Language level increased to {lesson_session.language_level}")
             
         except Exception as e:
             logger.error(f"LLM Error: {e}")

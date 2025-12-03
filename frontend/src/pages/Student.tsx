@@ -22,7 +22,7 @@ export default function Student() {
     });
     const [isRecording, setIsRecording] = useState(false);
     const [connectionStatus, setConnectionStatus] = useState('Disconnected');
-    const [transcript, setTranscript] = useState<Array<{ role: string, text: string }>>([]);
+    const [transcript, setTranscript] = useState<Array<{ role: string, text: string, final?: boolean }>>([]);
     const [sttLanguage, setSttLanguage] = useState<'ru-RU' | 'en-US'>('ru-RU');
 
     const [progress, setProgress] = useState<ProgressResponse | null>(null);
@@ -166,13 +166,17 @@ export default function Student() {
 
                             setTranscript(prev => {
                                 const last = prev[prev.length - 1];
-                                // If the last message was from the assistant and this one is too, merge them
-                                if (last && last.role === 'assistant' && msg.role === 'assistant') {
+                                // Only merge if this is a streaming fragment (no "final" flag) AND last message was assistant
+                                if (last && last.role === 'assistant' && msg.role === 'assistant' && !msg.final) {
                                     const newPrev = [...prev];
                                     // Add a space if needed
                                     const separator = last.text.endsWith(' ') ? '' : ' ';
                                     newPrev[prev.length - 1] = { ...last, text: last.text + separator + msg.text };
                                     return newPrev;
+                                }
+                                // Don't add empty final markers to transcript
+                                if (msg.final && !msg.text) {
+                                    return prev;
                                 }
                                 return [...prev, { role: msg.role, text: msg.text }];
                             });

@@ -4,6 +4,8 @@ import AdminUsers from '../components/AdminUsers';
 import AdminRules from '../components/AdminRules';
 import AdminBilling from '../components/AdminBilling';
 import AdminAnalytics from '../components/AdminAnalytics';
+import AIChatPanel from '../components/AIChatPanel';
+import AdminAIRules from '../components/AdminAIRules';
 
 export default function Admin() {
     const [activeTab, setActiveTab] = useState('settings');
@@ -11,6 +13,7 @@ export default function Admin() {
     const [model, setModel] = useState('gpt-4o-mini');
     const [msg, setMsg] = useState('');
     const [testResult, setTestResult] = useState('');
+    const [aiChatOpen, setAiChatOpen] = useState(false);
 
     useEffect(() => {
         if (activeTab === 'settings') {
@@ -82,6 +85,12 @@ export default function Admin() {
                 >
                     Analytics
                 </button>
+                <button
+                    onClick={() => setActiveTab('ai-rules')}
+                    style={{ background: activeTab === 'ai-rules' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px' }}
+                >
+                    AI Rules
+                </button>
             </div>
 
             {activeTab === 'settings' && (
@@ -139,6 +148,37 @@ export default function Admin() {
             {activeTab === 'rules' && <AdminRules />}
             {activeTab === 'billing' && <AdminBilling />}
             {activeTab === 'analytics' && <AdminAnalytics />}
+            {activeTab === 'ai-rules' && <AdminAIRules />}
+
+            {/* Floating AI Button */}
+            {!aiChatOpen && (
+                <button
+                    onClick={() => setAiChatOpen(true)}
+                    style={{
+                        position: 'fixed',
+                        bottom: '2rem',
+                        right: '2rem',
+                        width: '60px',
+                        height: '60px',
+                        borderRadius: '50%',
+                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                        border: 'none',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                        cursor: 'pointer',
+                        zIndex: 1000,
+                        fontSize: '24px',
+                        transition: 'transform 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
+                    onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                    title="AI Admin Assistant"
+                >
+                    🤖
+                </button>
+            )}
+
+            {/* AI Chat Panel */}
+            {aiChatOpen && <AIChatPanel onClose={() => setAiChatOpen(false)} />}
         </div>
     );
 }
