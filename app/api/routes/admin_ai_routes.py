@@ -288,7 +288,7 @@ def get_session_count(
         statement = statement.where(LessonSession.started_at >= from_dt)
     
     if to_date:
-        to_dt = datetime.fromisoformat(from_date)
+        to_dt = datetime.fromisoformat(to_date)
         statement = statement.where(LessonSession.started_at <= to_dt)
     
     sessions = session.exec(statement).all()
