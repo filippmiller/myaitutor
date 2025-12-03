@@ -88,6 +88,46 @@ def get_user_details(
         "profile": profile
     }
 
+class UserPreferencesUpdate(BaseModel):
+    preferred_address: str | None = None
+    preferred_voice: str | None = None
+
+@router.patch("/users/{user_id}/preferences")
+def update_user_preferences(
+    user_id: int,
+    data: UserPreferencesUpdate,
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    user = session.get(UserAccount, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    profile = session.exec(select(UserProfile).where(UserProfile.user_account_id == user.id)).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    import json
+    try:
+        prefs = json.loads(profile.preferences)
+    except:
+        prefs = {}
+        
+    if data.preferred_address is not None:
+        prefs["preferred_address"] = data.preferred_address
+    if data.preferred_voice is not None:
+        prefs["preferred_voice"] = data.preferred_voice
+        
+    profile.preferences = json.dumps(prefs)
+    session.add(profile)
+    session.commit()
+    session.refresh(profile)
+    
+    return profile
+
 @router.get("/system-rules")
 def list_system_rules(
     current_user: UserAccount = Depends(get_current_user),

@@ -34,8 +34,12 @@ It combines:
 ## 3. User Preferences & Voice
 - **Addressing**: The tutor asks for the preferred form of address if not set.
 - **Voice**: The user can select a preferred voice.
-  - Supported internal values: `male_deep`, `male_neutral`, `female_neutral`, `female_soft`.
-  - Mapped to OpenAI TTS voices: `onyx`, `echo`, `shimmer`, `nova`.
+  - **OpenAI**: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`.
+  - **Yandex**: `alisa`, `alena`, `filipp`, `jane`, `madirus`, `omazh`, `zahar`, `ermil`.
+  - **Integration**: 
+    - OpenAI TTS is used by default.
+    - If a Yandex voice is selected, the system uses `YandexService` (gRPC) to generate audio.
+    - Raw PCM from Yandex is converted to MP3 on-the-fly using `ffmpeg` for frontend compatibility.
 - **Extraction**: The system analyzes the conversation (`analyze_learning_exchange`) to detect if the user specified a preference, and updates the profile automatically.
 
 ## 4. Admin Interface

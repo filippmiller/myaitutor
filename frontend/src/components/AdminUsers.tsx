@@ -82,11 +82,76 @@ export default function AdminUsers() {
             </table>
 
             {selectedUser && (
-                <div style={{ padding: '1rem', border: '1px solid #ccc', borderRadius: '4px', background: '#2a2a2a' }}>
+                <div style={{ padding: '1rem', border: '1px solid #ccc', borderRadius: '4px', background: '#2a2a2a', marginTop: '20px' }}>
                     <h4>User Details: {selectedUser.account.email}</h4>
                     <p><strong>Level:</strong> {selectedUser.profile?.english_level}</p>
-                    <p><strong>Preferences:</strong> {selectedUser.profile?.preferences}</p>
-                    <button onClick={() => setSelectedUser(null)}>Close</button>
+
+                    <div style={{ marginTop: '1rem', padding: '1rem', background: '#333', borderRadius: '4px' }}>
+                        <h5>Preferences</h5>
+                        <label style={{ display: 'block', marginBottom: '10px' }}>
+                            Address as:
+                            <input
+                                type="text"
+                                placeholder="e.g. My Lord"
+                                defaultValue={JSON.parse(selectedUser.profile?.preferences || '{}').preferred_address || ''}
+                                id="pref-address"
+                                style={{ marginLeft: '10px' }}
+                            />
+                        </label>
+                        <label style={{ display: 'block', marginBottom: '10px' }}>
+                            Voice:
+                            <select
+                                id="pref-voice"
+                                defaultValue={JSON.parse(selectedUser.profile?.preferences || '{}').preferred_voice || 'alloy'}
+                                style={{ marginLeft: '10px' }}
+                            >
+                                <optgroup label="OpenAI">
+                                    <option value="alloy">Alloy</option>
+                                    <option value="echo">Echo</option>
+                                    <option value="fable">Fable</option>
+                                    <option value="onyx">Onyx</option>
+                                    <option value="nova">Nova</option>
+                                    <option value="shimmer">Shimmer</option>
+                                </optgroup>
+                                <optgroup label="Yandex">
+                                    <option value="alisa">Alisa (Yandex)</option>
+                                    <option value="alena">Alena (Yandex)</option>
+                                    <option value="filipp">Filipp (Yandex)</option>
+                                    <option value="jane">Jane (Yandex)</option>
+                                    <option value="madirus">Madirus (Yandex)</option>
+                                    <option value="omazh">Omazh (Yandex)</option>
+                                    <option value="zahar">Zahar (Yandex)</option>
+                                    <option value="ermil">Ermil (Yandex)</option>
+                                </optgroup>
+                            </select>
+                        </label>
+                        <button onClick={async () => {
+                            const address = (document.getElementById('pref-address') as HTMLInputElement).value;
+                            const voice = (document.getElementById('pref-voice') as HTMLSelectElement).value;
+
+                            try {
+                                const res = await fetch(`/api/admin/users/${selectedUser.account.id}/preferences`, {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        preferred_address: address,
+                                        preferred_voice: voice
+                                    })
+                                });
+                                if (res.ok) {
+                                    alert('Saved!');
+                                    fetchUserDetails(selectedUser.account.id);
+                                } else {
+                                    alert('Error saving');
+                                }
+                            } catch (e) {
+                                console.error(e);
+                                alert('Error saving');
+                            }
+                        }}>Save Preferences</button>
+                    </div>
+
+                    <button onClick={() => setSelectedUser(null)} style={{ marginTop: '10px' }}>Close</button>
                 </div>
             )}
         </div>

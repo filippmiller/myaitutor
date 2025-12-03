@@ -185,6 +185,48 @@ async def process_voice_interaction(
     except:
         voice_pref = None
         
+    # Yandex Voices
+    yandex_voices = ['alisa', 'alena', 'filipp', 'jane', 'madirus', 'omazh', 'zahar', 'ermil']
+    
+    if voice_pref in yandex_voices:
+        try:
+            from app.services.yandex_service import YandexService
+            import subprocess
+            yandex_service = YandexService()
+            
+            # Save to file
+            full_path = os.path.join(os.getcwd(), speech_file_path)
+            
+            # Use ffmpeg to convert PCM (48k, 16bit, mono) to MP3
+            process = subprocess.Popen(
+                [
+                    "ffmpeg",
+                    "-f", "s16le", "-ar", "48000", "-ac", "1", "-i", "pipe:0",
+                    "-y", # Overwrite
+                    full_path
+                ],
+                stdin=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+            
+            for chunk in yandex_service.synthesize_stream(text=assistant_text, voice=voice_pref):
+                try:
+                    process.stdin.write(chunk)
+                except BrokenPipeError:
+                    break
+            
+            process.stdin.close()
+            process.wait()
+            
+            return {
+                "user_text": user_text,
+                "assistant_text": assistant_text,
+                "audio_url": f"/static/audio/response_{asst_msg.id}.mp3"
+            }
+        except Exception as e:
+            print(f"Yandex TTS failed: {e}, falling back to OpenAI")
+            # Fallback to OpenAI logic below
+
     # Simple mapping for OpenAI TTS
     # alloy, echo, fable, onyx, nova, shimmer
     voice_map = {
