@@ -240,10 +240,12 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
         # 4. Loops
         loop = asyncio.get_running_loop()
         greeting_triggered = False  # Flag to prevent multiple greeting triggers
+        greeting_item_ready = asyncio.Event()  # Event to signal when greeting conversation item is ready
+        greeting_item_id = None  # Store the greeting item ID
         
         async def frontend_to_openai():
             """Read from frontend WebSocket, convert, send to OpenAI."""
-            nonlocal greeting_triggered
+            nonlocal greeting_triggered, greeting_item_id
             try:
                 while True:
                     message = await websocket.receive()
@@ -289,22 +291,25 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                                     }
                                     logger.info(f"Realtime: Sending greeting trigger message (length: {len(greeting_text)} chars)")
                                     await openai_ws.send(json.dumps(greeting_trigger))
+                                    logger.info("Realtime: Waiting for conversation item to be created...")
                                     
-                                    # Wait for conversation item to be created
-                                    await asyncio.sleep(0.2)
-                                    
-                                    # Request response
-                                    response_request = {"type": "response.create"}
-                                    logger.info("Realtime: Requesting response creation...")
-                                    await openai_ws.send(json.dumps(response_request))
-                                    logger.info("Realtime: Greeting trigger and response request sent successfully")
-                                except Exception as greeting_error:
-                                    logger.error(f"Realtime: Failed to trigger greeting: {greeting_error}", exc_info=True)
-                                    await websocket.send_json({
-                                        "type": "system",
-                                        "level": "warning",
-                                        "message": f"Failed to trigger greeting: {str(greeting_error)}. The lesson will continue, but you may need to speak first."
-                                    })
+                                    # Wait for conversation item to be created (with timeout)
+                                    try:
+                                        await asyncio.wait_for(greeting_item_ready.wait(), timeout=5.0)
+                                        logger.info(f"Realtime: Conversation item ready (ID: {greeting_item_id}), requesting response...")
+                                        
+                                        # Wait a bit more for item to be fully processed
+                                        await asyncio.sleep(0.3)
+                                        
+                                        # Request response
+                                        response_request = {"type": "response.create"}
+                                        logger.info("Realtime: Requesting response creation...")
+                                        await openai_ws.send(json.dumps(response_request))
+                                        logger.info("Realtime: Response request sent successfully")
+                                    except asyncio.TimeoutError:
+                                        logger.error("Realtime: Timeout waiting for conversation item creation - proceeding anyway")
+                                        response_request = {"type": "response.create"}
+                                        await openai_ws.send(json.dumps(response_request))
                                 except Exception as greeting_error:
                                     logger.error(f"Realtime: Failed to trigger greeting: {greeting_error}", exc_info=True)
                                     await websocket.send_json({
@@ -348,6 +353,7 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
 
         async def openai_to_frontend():
             """Read from OpenAI, forward text/audio to frontend."""
+            nonlocal greeting_item_id
             audio_delta_count = 0
             try:
                 async for message in openai_ws:
@@ -403,9 +409,17 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                     
                     elif event_type == "conversation.item.created":
                         # Conversation item created
-                        item_id = event.get("item", {}).get("id")
-                        item_type = event.get("item", {}).get("type")
+                        item = event.get("item", {})
+                        item_id = item.get("id")
+                        item_type = item.get("type")
                         logger.info(f"Realtime: Conversation item created (ID: {item_id}, Type: {item_type})")
+                        
+                        # If this is the greeting item, signal it's ready
+                        if item_type == "message" and item.get("role") == "user":
+                            nonlocal greeting_item_id
+                            greeting_item_id = item_id
+                            logger.info(f"Realtime: Greeting conversation item ready (ID: {item_id}), setting ready event...")
+                            greeting_item_ready.set()
                     
                     elif event_type == "response.created":
                         # Response started
