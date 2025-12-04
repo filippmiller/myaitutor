@@ -138,4 +138,29 @@ The goal was to "harden" the voice lesson for production:
 -   **Directive Triggers:** Implemented in `voice_ws.py`.
 -   **Production Ready:** The system now behaves deterministically regarding the lesson start.
 
+## Stage 3.5: Debugging Silent Lesson (Reasoning Log)
+
+### Problem Summary
+User reported that the lesson starts but remains silent (no greeting, no transcript), and the WebSocket eventually closes with code 1005.
+
+### Context Discovered
+-   **Logs:** Revealed `RuntimeError: Cannot call "receive" once a disconnect message has been received.`
+-   **Root Cause:** A concurrency issue in `run_realtime_session`. The `frontend_to_openai` loop was trying to read from the WebSocket after it had already been flagged as disconnected (likely due to a race condition or unhandled previous disconnect). Additionally, the `asyncio.gather` pattern was causing the session to hang if one task failed but others remained active.
+
+### Step-by-Step Reasoning Log
+
+1.  **Log Analysis**
+    -   *Observation:* The error happened immediately after "Triggering greeting...".
+    -   *Hypothesis:* The client might be disconnecting, or the server is crashing when trying to read/write to the socket.
+    -   *Finding:* The specific `RuntimeError` confirms that the code attempted to call `receive()` on a closed connection.
+
+2.  **Concurrency Fix (`voice_ws.py`)**
+    -   *Action:* Replaced `asyncio.gather` with `asyncio.wait(..., return_when=asyncio.FIRST_COMPLETED)`.
+    -   *Reasoning:* This ensures that if *any* part of the pipeline (frontend reader, converter, OpenAI reader) fails or exits, the entire session is torn down immediately. This prevents "zombie" tasks from keeping the session alive in a broken state.
+    -   *Error Handling:* Added specific `try...except` blocks to catch `RuntimeError` and `WebSocketDisconnect` gracefully, logging them as info/warnings rather than crashing errors.
+
+3.  **Verification**
+    -   *Status:* Fix deployed. Waiting for user confirmation that the greeting is now audible.
+
+
 

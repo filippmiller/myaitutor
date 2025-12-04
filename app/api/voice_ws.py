@@ -234,22 +234,48 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         try:
                             logger.info(f"Realtime: Received text message: {message['text']}")
                             data = json.loads(message["text"])
-                            if data.get("type") == "system_event" and data.get("event") == "lesson_started":
+                            
+                            # Handle config message
+                            if data.get("type") == "config":
+                                stt_language = data.get("stt_language", "en-US")
+                                logger.info(f"Realtime: Config received - STT Language: {stt_language}")
+                                # In Realtime mode, OpenAI handles STT internally, but we log it for reference
+                                # Could be used for future enhancements or logging
+                            
+                            elif data.get("type") == "system_event" and data.get("event") == "lesson_started":
                                 logger.info("Realtime: Received lesson_started. Triggering greeting...")
-                                user_name = profile.name if profile and profile.name else "Student"
-                                await openai_ws.send(json.dumps({
-                                    "type": "conversation.item.create",
-                                    "item": {
-                                        "type": "message",
-                                        "role": "user",
-                                        "content": [{"type": "input_text", "text": f"System Event: Lesson Started. The student's name is {user_name}. Greet them and jump right into the lesson. Follow the Universal Greeting Protocol strictly."}]
-                                    }
-                                }))
-                                await openai_ws.send(json.dumps({"type": "response.create"}))
+                                try:
+                                    # System prompt already includes Universal Greeting Protocol
+                                    # Just trigger a response - OpenAI will follow the system prompt automatically
+                                    greeting_trigger = json.dumps({
+                                        "type": "conversation.item.create",
+                                        "item": {
+                                            "type": "message",
+                                            "role": "user",
+                                            "content": [{"type": "input_text", "text": "Start the lesson."}]
+                                        }
+                                    })
+                                    await openai_ws.send(greeting_trigger)
+                                    await openai_ws.send(json.dumps({"type": "response.create"}))
+                                    logger.info("Realtime: Greeting trigger sent successfully (relying on system prompt for protocol)")
+                                except Exception as greeting_error:
+                                    logger.error(f"Realtime: Failed to trigger greeting: {greeting_error}", exc_info=True)
+                                    await websocket.send_json({
+                                        "type": "system",
+                                        "level": "warning",
+                                        "message": f"Failed to trigger greeting: {str(greeting_error)}. The lesson will continue, but you may need to speak first."
+                                    })
                         except Exception as e:
                             logger.error(f"Realtime: Error handling text message: {e}")
             except WebSocketDisconnect:
-                pass
+                logger.info("Realtime: Frontend disconnected (WebSocketDisconnect)")
+            except RuntimeError as e:
+                if "disconnect message" in str(e):
+                    logger.info("Realtime: Frontend disconnected (RuntimeError)")
+                else:
+                    logger.error(f"Frontend->OpenAI RuntimeError: {e}")
+            except Exception as e:
+                logger.error(f"Frontend->OpenAI Error: {e}")
             except Exception as e:
                 logger.error(f"Frontend->OpenAI Error: {e}")
             finally:
@@ -309,62 +335,151 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                             session.add(turn)
                             session.commit()
                             
+                    elif event_type == "response.created":
+                        # Response started
+                        response_id = event.get("response", {}).get("id")
+                        logger.info(f"Realtime: Response created (ID: {response_id})")
+                        
+                    elif event_type == "response.done":
+                        # Response completed
+                        response_id = event.get("response", {}).get("id")
+                        logger.info(f"Realtime: Response done (ID: {response_id})")
+                        
+                    elif event_type == "response.output_item.added":
+                        # Output item added (for tracking)
+                        item_id = event.get("item", {}).get("id")
+                        item_type = event.get("item", {}).get("type")
+                        logger.debug(f"Realtime: Output item added (ID: {item_id}, Type: {item_type})")
+                    
                     elif event_type == "response.output_item.done":
-                        # Item done, check for markers in transcript
+                        # Item done, extract transcript and save it
                         item = event.get("item", {})
                         content = item.get("content", [])
+                        transcript = None
+                        
                         if content:
                             for part in content:
                                 if part.get("type") == "audio" and "transcript" in part:
                                     transcript = part["transcript"]
-                                    if transcript:
-                                        # Check for language mode markers
-                                        marker = parse_language_mode_marker(transcript)
-                                        if marker:
-                                            mode, level_change = marker
-                                            if mode:
-                                                lesson_session.language_mode = mode
-                                                lesson_session.language_chosen_at = datetime.utcnow()
-                                                if mode == "MIXED":
-                                                    lesson_session.language_level = 1
-                                                session.add(lesson_session)
-                                                session.commit()
-                                                logger.info(f"Realtime: Language mode set to {mode}")
-                                            elif level_change == "LEVEL_UP":
-                                                if lesson_session.language_level:
-                                                    lesson_session.language_level = min(lesson_session.language_level + 1, 5)
-                                                    session.add(lesson_session)
-                                                    session.commit()
-                                                    logger.info(f"Realtime: Language level increased to {lesson_session.language_level}")
-                                            
-                                            # Save Assistant Turn
-                                            if transcript:
-                                                turn = LessonTurn(
-                                                    session_id=lesson_session.id,
-                                                    speaker="assistant",
-                                                    text=transcript
-                                                )
-                                                session.add(turn)
-                                                session.commit()
+                                    break
+                        
+                        if transcript:
+                            # Always save Assistant Turn (greeting, normal responses, etc.)
+                            turn = LessonTurn(
+                                session_id=lesson_session.id,
+                                speaker="assistant",
+                                text=transcript
+                            )
+                            session.add(turn)
+                            session.commit()
+                            logger.info(f"Realtime: Saved assistant transcript (length: {len(transcript)})")
+                            
+                            # Check for language mode markers (separate from saving)
+                            marker = parse_language_mode_marker(transcript)
+                            if marker:
+                                mode, level_change = marker
+                                if mode:
+                                    lesson_session.language_mode = mode
+                                    lesson_session.language_chosen_at = datetime.utcnow()
+                                    if mode == "MIXED":
+                                        lesson_session.language_level = 1
+                                    session.add(lesson_session)
+                                    session.commit()
+                                    logger.info(f"Realtime: Language mode set to {mode}")
+                                elif level_change == "LEVEL_UP":
+                                    if lesson_session.language_level:
+                                        lesson_session.language_level = min(lesson_session.language_level + 1, 5)
+                                        session.add(lesson_session)
+                                        session.commit()
+                                        logger.info(f"Realtime: Language level increased to {lesson_session.language_level}")
 
                     elif event_type == "error":
                         logger.error(f"OpenAI Realtime Error: {event}")
+                    else:
+                        # Log unhandled events for debugging
+                        logger.debug(f"Realtime: Unhandled event type: {event_type}")
                         
             except Exception as e:
                 logger.error(f"OpenAI->Frontend Error: {e}")
                 raise e # Trigger fallback
 
         # Start tasks
-        tasks = [
-            asyncio.create_task(frontend_to_openai()),
-            asyncio.create_task(converter_reader()),
-            asyncio.create_task(openai_to_frontend())
-        ]
+        task_frontend_to_openai = asyncio.create_task(frontend_to_openai())
+        task_converter_reader = asyncio.create_task(converter_reader())
+        task_openai_to_frontend = asyncio.create_task(openai_to_frontend())
         
-        # Wait for tasks
-        # Note: We removed the immediate greeting trigger here because we now wait for 'lesson_started' event.
-
-        await asyncio.gather(*tasks)
+        tasks = [
+            ("frontend_to_openai", task_frontend_to_openai),
+            ("converter_reader", task_converter_reader),
+            ("openai_to_frontend", task_openai_to_frontend)
+        ]
+        task_list = [t[1] for t in tasks]
+        
+        # 5. Run Tasks with Graceful Shutdown
+        # Wait for tasks and handle errors gracefully
+        try:
+            # Wait for any task to complete or fail
+            done, pending = await asyncio.wait(
+                task_list,
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=None
+            )
+            
+            # Find which task completed and check for errors
+            completed_task = done.pop() if done else None
+            task_name = "unknown"
+            for name, task in tasks:
+                if task == completed_task:
+                    task_name = name
+                    break
+            
+            # Check if task completed normally or with error
+            if completed_task:
+                try:
+                    completed_task.result()  # This will raise if task had exception
+                    logger.info(f"Realtime: Task '{task_name}' completed normally. Initiating graceful shutdown...")
+                except Exception as task_error:
+                    logger.error(f"Realtime: Task '{task_name}' failed with error: {task_error}", exc_info=True)
+                    # On error, we still do graceful shutdown but log the error
+            else:
+                logger.info("Realtime: No tasks completed (unexpected condition).")
+            
+            # Graceful shutdown: give other tasks a moment to finish current operations
+            logger.info(f"Realtime: Graceful shutdown - cancelling {len(pending)} remaining tasks...")
+            for task in pending:
+                task.cancel()
+            
+            # Wait briefly for tasks to handle cancellation gracefully
+            if pending:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending, return_exceptions=True),
+                        timeout=2.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Realtime: Some tasks didn't cancel within timeout, forcing termination")
+                    
+        except Exception as e:
+            logger.error(f"Realtime: Unexpected error in task management: {e}", exc_info=True)
+            # Emergency shutdown
+            for _, task in tasks:
+                if not task.done():
+                    task.cancel()
+        finally:
+            # Ensure input converter is closed
+            try:
+                if input_converter.stdin and not input_converter.stdin.closed:
+                    input_converter.stdin.close()
+                if input_converter.stdout and not input_converter.stdout.closed:
+                    input_converter.stdout.close()
+                if input_converter.poll() is None:  # Still running
+                    input_converter.terminate()
+                    try:
+                        input_converter.wait(timeout=1.0)
+                    except:
+                        input_converter.kill()
+            except Exception as cleanup_error:
+                logger.error(f"Realtime: Error during converter cleanup: {cleanup_error}")
 
 
 async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name: str, voice_id: str, profile: UserProfile | None, settings: AppSettings, session: Session):
@@ -528,44 +643,66 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                     try:
                         logger.info(f"Legacy: Received text message: {message['text']}")
                         data = json.loads(message["text"])
-                        if data.get("type") == "system_event" and data.get("event") == "lesson_started":
+                        
+                        # Handle config message
+                        if data.get("type") == "config":
+                            stt_language = data.get("stt_language", "en-US")
+                            logger.info(f"Legacy: Config received - STT Language: {stt_language}")
+                            # Store in session state if needed (currently not used in Legacy VAD+Whisper mode)
+                        
+                        elif data.get("type") == "system_event" and data.get("event") == "lesson_started":
                             logger.info("Legacy: Received lesson_started. Generating greeting...")
                             
-                            # Generate dynamic greeting using LLM
-                            from openai import AsyncOpenAI
-                            client = AsyncOpenAI(api_key=api_key)
-                            
-                            user_name = profile.name if profile and profile.name else "Student"
-                            greeting_prompt = conversation_history + [
-                                {"role": "system", "content": f"System Event: Lesson Started. The student's name is {user_name}. Generate a greeting that follows the Universal Greeting Protocol. Brief, warm, NO meta-questions. Start an activity immediately."}
-                            ]
-                            
                             try:
-                                completion = await client.chat.completions.create(
-                                    model=settings.default_model,
-                                    messages=greeting_prompt,
-                                    max_tokens=150
-                                )
-                                greeting_text = completion.choices[0].message.content
-                            except Exception as e:
-                                logger.error(f"Legacy Greeting Generation Error: {e}")
-                                greeting_text = "Hello! I am your AI tutor. Let's start our lesson."
+                                # Generate dynamic greeting using LLM
+                                from openai import AsyncOpenAI
+                                client = AsyncOpenAI(api_key=api_key)
+                                
+                                user_name = profile.name if profile and profile.name else "Student"
+                                greeting_prompt = conversation_history + [
+                                    {"role": "system", "content": f"System Event: Lesson Started. The student's name is {user_name}. Generate a greeting that follows the Universal Greeting Protocol. Brief, warm, NO meta-questions. Start an activity immediately."}
+                                ]
+                                
+                                try:
+                                    completion = await client.chat.completions.create(
+                                        model=settings.default_model,
+                                        messages=greeting_prompt,
+                                        max_tokens=150
+                                    )
+                                    greeting_text = completion.choices[0].message.content
+                                    logger.info(f"Legacy: Greeting generated successfully (length: {len(greeting_text)})")
+                                except Exception as e:
+                                    logger.error(f"Legacy Greeting Generation Error: {e}", exc_info=True)
+                                    greeting_text = "Hello! I am your AI tutor. Let's start our lesson."
+                                    await websocket.send_json({
+                                        "type": "system",
+                                        "level": "warning",
+                                        "message": "Greeting generation failed, using default greeting."
+                                    })
 
-                            # Send text
-                            await websocket.send_json({"type": "transcript", "role": "assistant", "text": greeting_text})
-                            conversation_history.append({"role": "assistant", "content": greeting_text})
-                            
-                            # Save Assistant Turn (Greeting)
-                            turn = LessonTurn(
-                                session_id=lesson_session.id,
-                                speaker="assistant",
-                                text=greeting_text
-                            )
-                            session.add(turn)
-                            session.commit()
-                            
-                            # Send audio
-                            await synthesize_and_send(greeting_text)
+                                # Send text
+                                await websocket.send_json({"type": "transcript", "role": "assistant", "text": greeting_text})
+                                conversation_history.append({"role": "assistant", "content": greeting_text})
+                                
+                                # Save Assistant Turn (Greeting)
+                                turn = LessonTurn(
+                                    session_id=lesson_session.id,
+                                    speaker="assistant",
+                                    text=greeting_text
+                                )
+                                session.add(turn)
+                                session.commit()
+                                
+                                # Send audio
+                                await synthesize_and_send(greeting_text)
+                                logger.info("Legacy: Greeting sent successfully (text + audio)")
+                            except Exception as e:
+                                logger.error(f"Legacy: Failed to process greeting: {e}", exc_info=True)
+                                await websocket.send_json({
+                                    "type": "system",
+                                    "level": "error",
+                                    "message": f"Failed to generate greeting: {str(e)}. Please try speaking first."
+                                })
                     except Exception as e:
                         logger.error(f"Legacy: Error handling text message: {e}")
         except WebSocketDisconnect:
