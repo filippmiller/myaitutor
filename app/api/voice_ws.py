@@ -301,14 +301,26 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                                         # Wait a bit more for item to be fully processed
                                         await asyncio.sleep(0.3)
                                         
-                                        # Request response
-                                        response_request = {"type": "response.create"}
-                                        logger.info("Realtime: Requesting response creation...")
+                                        # Request response with explicit instructions and modalities
+                                        response_request = {
+                                            "type": "response.create",
+                                            "response": {
+                                                "modalities": ["text", "audio"],
+                                                "instructions": f"Greet the user {user_name} warmly and start the lesson immediately. Do not ask if they are ready."
+                                            }
+                                        }
+                                        logger.info("Realtime: Requesting response creation with explicit modalities...")
                                         await openai_ws.send(json.dumps(response_request))
                                         logger.info("Realtime: Response request sent successfully")
                                     except asyncio.TimeoutError:
                                         logger.error("Realtime: Timeout waiting for conversation item creation - proceeding anyway")
-                                        response_request = {"type": "response.create"}
+                                        response_request = {
+                                            "type": "response.create",
+                                            "response": {
+                                                "modalities": ["text", "audio"],
+                                                "instructions": f"Greet the user {user_name} warmly and start the lesson immediately."
+                                            }
+                                        }
                                         await openai_ws.send(json.dumps(response_request))
                                 except Exception as greeting_error:
                                     logger.error(f"Realtime: Failed to trigger greeting: {greeting_error}", exc_info=True)
@@ -426,13 +438,22 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                     
                     elif event_type == "response.created":
                         # Response started
-                        response_id = event.get("response", {}).get("id")
+                        response = event.get("response", {})
+                        response_id = response.get("id")
                         logger.info(f"Realtime: Response created (ID: {response_id})")
+                        logger.info(f"Realtime: Response created details: {json.dumps(response, default=str)}")
                         
                     elif event_type == "response.done":
                         # Response completed
-                        response_id = event.get("response", {}).get("id")
-                        logger.info(f"Realtime: Response done (ID: {response_id})")
+                        response = event.get("response", {})
+                        response_id = response.get("id")
+                        status = response.get("status")
+                        status_details = response.get("status_details")
+                        logger.info(f"Realtime: Response done (ID: {response_id}, Status: {status})")
+                        if status != "completed":
+                            logger.error(f"Realtime: Response failed/cancelled details: {json.dumps(response, default=str)}")
+                        else:
+                            logger.info(f"Realtime: Response usage: {json.dumps(response.get('usage'), default=str)}")
                         
                     elif event_type == "response.output_item.added":
                         # Output item added (for tracking)
