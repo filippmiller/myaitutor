@@ -133,8 +133,6 @@ export default function Admin() {
                             } catch (e) {
                                 setTestResult('FFmpeg Test Failed');
                             }
-                                setTestResult('FFmpeg Test Failed');
-                            }
                         }}>Test FFmpeg</button>
                         <button onClick={async () => {
                             setTestResult('Fixing DB...');
@@ -154,54 +152,54 @@ export default function Admin() {
                     </div>
 
                     {testResult && (
-                <div style={{ marginTop: '20px', padding: '10px', background: '#f0f0f0', borderRadius: '4px', color: '#333' }}>
-                    <strong>Test Result:</strong> {testResult}
+                        <div style={{ marginTop: '20px', padding: '10px', background: '#f0f0f0', borderRadius: '4px', color: '#333' }}>
+                            <strong>Test Result:</strong> {testResult}
+                        </div>
+                    )}
+
+                    <TokensPanel />
                 </div>
-            )}
+            )
+            }
 
-            <TokensPanel />
-        </div>
-    )
-}
+            {activeTab === 'users' && <AdminUsers />}
+            {activeTab === 'rules' && <AdminRules />}
+            {activeTab === 'billing' && <AdminBilling />}
+            {activeTab === 'analytics' && <AdminAnalytics />}
+            {activeTab === 'ai-rules' && <AdminAIRules />}
+            {activeTab === 'beginner-rules' && <AdminBeginnerRules />}
 
-{ activeTab === 'users' && <AdminUsers /> }
-{ activeTab === 'rules' && <AdminRules /> }
-{ activeTab === 'billing' && <AdminBilling /> }
-{ activeTab === 'analytics' && <AdminAnalytics /> }
-{ activeTab === 'ai-rules' && <AdminAIRules /> }
-{ activeTab === 'beginner-rules' && <AdminBeginnerRules /> }
+            {/* Floating AI Button */}
+            {
+                !aiChatOpen && (
+                    <button
+                        onClick={() => setAiChatOpen(true)}
+                        style={{
+                            position: 'fixed',
+                            bottom: '2rem',
+                            right: '2rem',
+                            width: '60px',
+                            height: '60px',
+                            borderRadius: '50%',
+                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            border: 'none',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                            cursor: 'pointer',
+                            zIndex: 1000,
+                            fontSize: '24px',
+                            transition: 'transform 0.2s ease'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
+                        onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                        title="AI Admin Assistant"
+                    >
+                        🤖
+                    </button>
+                )
+            }
 
-{/* Floating AI Button */ }
-{
-    !aiChatOpen && (
-        <button
-            onClick={() => setAiChatOpen(true)}
-            style={{
-                position: 'fixed',
-                bottom: '2rem',
-                right: '2rem',
-                width: '60px',
-                height: '60px',
-                borderRadius: '50%',
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                border: 'none',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-                cursor: 'pointer',
-                zIndex: 1000,
-                fontSize: '24px',
-                transition: 'transform 0.2s ease'
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
-            onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-            title="AI Admin Assistant"
-        >
-            🤖
-        </button>
-    )
-}
-
-{/* AI Chat Panel */ }
-{ aiChatOpen && <AIChatPanel onClose={() => setAiChatOpen(false)} /> }
+            {/* AI Chat Panel */}
+            {aiChatOpen && <AIChatPanel onClose={() => setAiChatOpen(false)} />}
         </div >
     );
 }
