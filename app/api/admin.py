@@ -436,17 +436,29 @@ def save_beginner_rules(
 
 @router.post("/fix-db-schema")
 def fix_db_schema(
-    current_user: UserAccount = Depends(get_current_user)
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
         
     try:
         from update_db import update_schema
-        # Capture stdout? For now just run it.
-        # We can modify update_schema to return logs, but let's just run it.
+        from sqlalchemy import text
+        
+        # Run updates
         update_schema()
-        return {"status": "ok", "message": "Schema update executed. Check logs if issues persist."}
+        
+        # Verify columns
+        result = session.exec(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'lesson_sessions'")).all()
+        columns = [row for row in result]
+        
+        return {
+            "status": "ok", 
+            "message": "Schema update executed.",
+            "columns": columns,
+            "has_language_mode": "language_mode" in columns
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Schema update failed: {str(e)}")
 

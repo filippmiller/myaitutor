@@ -139,7 +139,7 @@ export default function Admin() {
                             try {
                                 const res = await fetch('/api/admin/fix-db-schema', { method: 'POST' });
                                 const data = await res.json();
-                                setTestResult(`DB Fix: ${data.status} - ${data.message}`);
+                                setTestResult(`DB Fix: ${data.status} - Has Mode: ${data.has_language_mode} - Cols: ${data.columns?.join(', ')}`);
                             } catch (e) {
                                 setTestResult('DB Fix Failed');
                             }
