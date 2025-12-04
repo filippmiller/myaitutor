@@ -417,7 +417,9 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         # Only signal ready for greeting item (first user message)
                         if item_type == "message" and item.get("role") == "user":
                             # Check if this is the greeting item (first user message)
-                            if greeting_item_id is None:
+                            # Store current value first to avoid nonlocal scope issue
+                            current_id = greeting_item_id
+                            if current_id is None:
                                 greeting_item_id = item_id
                                 logger.info(f"Realtime: Greeting conversation item ready (ID: {item_id}), setting ready event...")
                                 greeting_item_ready.set()
