@@ -14,7 +14,7 @@ from sqlmodel import Session, select
 import websockets
 
 from app.database import get_session
-from app.models import AppSettings, UserAccount, UserProfile, AuthSession, LessonSession
+from app.models import AppSettings, UserAccount, UserProfile, AuthSession, LessonSession, LessonTurn
 from app.services.yandex_service import YandexService, AudioConverter
 from app.services.voice_engine import get_voice_engine
 from app.services.tutor_service import build_tutor_system_prompt
@@ -298,6 +298,14 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         transcript = event.get("transcript")
                         if transcript:
                             await websocket.send_json({"type": "transcript", "role": "user", "text": transcript})
+                            # Save User Turn
+                            turn = LessonTurn(
+                                session_id=lesson_session.id,
+                                speaker="user",
+                                text=transcript
+                            )
+                            session.add(turn)
+                            session.commit()
                             
                     elif event_type == "response.output_item.done":
                         # Item done, check for markers in transcript
@@ -326,6 +334,16 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                                                     session.add(lesson_session)
                                                     session.commit()
                                                     logger.info(f"Realtime: Language level increased to {lesson_session.language_level}")
+                                            
+                                            # Save Assistant Turn
+                                            if transcript:
+                                                turn = LessonTurn(
+                                                    session_id=lesson_session.id,
+                                                    speaker="assistant",
+                                                    text=transcript
+                                                )
+                                                session.add(turn)
+                                                session.commit()
 
                     elif event_type == "error":
                         logger.error(f"OpenAI Realtime Error: {event}")
@@ -418,6 +436,15 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
         await websocket.send_json({"type": "transcript", "role": "user", "text": text})
         conversation_history.append({"role": "user", "content": text})
         
+        # Save User Turn
+        turn = LessonTurn(
+            session_id=lesson_session.id,
+            speaker="user",
+            text=text
+        )
+        session.add(turn)
+        session.commit()
+        
         try:
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=api_key)
@@ -456,6 +483,15 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                 
             conversation_history.append({"role": "assistant", "content": full_resp})
             
+            # Save Assistant Turn
+            turn = LessonTurn(
+                session_id=lesson_session.id,
+                speaker="assistant",
+                text=full_resp
+            )
+            session.add(turn)
+            session.commit()
+            
             # Check for language mode markers
             marker = parse_language_mode_marker(full_resp)
             if marker:
@@ -491,11 +527,38 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                         data = json.loads(message["text"])
                         if data.get("type") == "system_event" and data.get("event") == "lesson_started":
                             logger.info("Legacy: Received lesson_started. Generating greeting...")
-                            greeting_text = "Hello! I am your AI tutor. Let's start our lesson. What would you like to talk about?"
                             
+                            # Generate dynamic greeting using LLM
+                            from openai import AsyncOpenAI
+                            client = AsyncOpenAI(api_key=api_key)
+                            
+                            greeting_prompt = conversation_history + [
+                                {"role": "system", "content": "The user has just started the lesson. Generate a warm, short greeting (1-2 sentences) based on the system instructions (language mode, etc). Do not ask complex questions yet, just welcome them."}
+                            ]
+                            
+                            try:
+                                completion = await client.chat.completions.create(
+                                    model=settings.default_model,
+                                    messages=greeting_prompt,
+                                    max_tokens=100
+                                )
+                                greeting_text = completion.choices[0].message.content
+                            except Exception as e:
+                                logger.error(f"Legacy Greeting Generation Error: {e}")
+                                greeting_text = "Hello! I am your AI tutor. Let's start our lesson."
+
                             # Send text
                             await websocket.send_json({"type": "transcript", "role": "assistant", "text": greeting_text})
                             conversation_history.append({"role": "assistant", "content": greeting_text})
+                            
+                            # Save Assistant Turn (Greeting)
+                            turn = LessonTurn(
+                                session_id=lesson_session.id,
+                                speaker="assistant",
+                                text=greeting_text
+                            )
+                            session.add(turn)
+                            session.commit()
                             
                             # Send audio
                             await synthesize_and_send(greeting_text)
