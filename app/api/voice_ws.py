@@ -170,7 +170,16 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
 
     # Build System Prompt
     system_instructions = build_tutor_system_prompt(session, profile, lesson_session_id=lesson_session.id)
-    logger.info(f"System Instructions (First 200 chars): {system_instructions[:200]}")
+    
+    # Log system prompt details
+    logger.info("="*80)
+    logger.info("SYSTEM PROMPT BUILT:")
+    logger.info(f"  Student Name: {profile.name if profile else 'None'}")
+    logger.info(f"  Student Level: {profile.english_level if profile else 'None'}")
+    logger.info(f"  Lesson Session ID: {lesson_session.id}")
+    logger.info(f"  System Prompt Length: {len(system_instructions)} characters")
+    logger.info(f"  System Prompt (First 500 chars):\n{system_instructions[:500]}")
+    logger.info("="*80)
 
     # 1. Connect to OpenAI
     url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
@@ -200,6 +209,18 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
             }
         }
         await openai_ws.send(json.dumps(session_update))
+        logger.info("Realtime: session.update sent to OpenAI with system prompt")
+        
+        # Wait a moment for OpenAI to process session.update
+        await asyncio.sleep(0.5)
+        logger.info("Realtime: Session should be ready, sending ready signal to frontend")
+        
+        # Send ready signal to frontend
+        await websocket.send_json({
+            "type": "system",
+            "level": "info",
+            "message": "Session ready. You can now start the lesson."
+        })
         
         # 3. Audio Converters
         # Frontend (WebM) -> PCM 24k (OpenAI)
@@ -246,13 +267,14 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                                 logger.info("Realtime: Received lesson_started. Triggering greeting...")
                                 try:
                                     # System prompt already includes Universal Greeting Protocol
-                                    # Just trigger a response - OpenAI will follow the system prompt automatically
+                                    # Trigger first interaction - OpenAI will follow the system prompt automatically
+                                    user_name = profile.name if profile and profile.name else "Student"
                                     greeting_trigger = json.dumps({
                                         "type": "conversation.item.create",
                                         "item": {
                                             "type": "message",
                                             "role": "user",
-                                            "content": [{"type": "input_text", "text": "Start the lesson."}]
+                                            "content": [{"type": "input_text", "text": f"System Event: Lesson Starting Now. This is the FIRST interaction with the student. The student's name is {user_name}. Follow the Universal Greeting Protocol strictly: greet them warmly using their name, mention any last session summary if available, and start an immediate activity without asking meta-questions."}]
                                         }
                                     })
                                     await openai_ws.send(greeting_trigger)
@@ -335,6 +357,10 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                             session.add(turn)
                             session.commit()
                             
+                    elif event_type == "session.updated":
+                        # Session update confirmed by OpenAI
+                        logger.info("Realtime: Session updated confirmed by OpenAI - system prompt is now active")
+                    
                     elif event_type == "response.created":
                         # Response started
                         response_id = event.get("response", {}).get("id")
