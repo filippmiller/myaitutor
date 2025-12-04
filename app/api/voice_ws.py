@@ -414,8 +414,8 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         item_type = item.get("type")
                         logger.info(f"Realtime: Conversation item created (ID: {item_id}, Type: {item_type})")
                         
-                        # If this is the greeting item, signal it's ready
-                        if item_type == "message" and item.get("role") == "user":
+                        # Only signal ready for greeting item (first user message)
+                        if item_type == "message" and item.get("role") == "user" and greeting_item_id is None:
                             nonlocal greeting_item_id
                             greeting_item_id = item_id
                             logger.info(f"Realtime: Greeting conversation item ready (ID: {item_id}), setting ready event...")
