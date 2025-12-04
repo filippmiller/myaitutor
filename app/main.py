@@ -21,13 +21,6 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
-    
-    # Run schema updates
-    try:
-        from update_db import update_schema
-        update_schema()
-    except Exception as e:
-        print(f"Error running schema updates: {e}")
         
     os.makedirs("static/audio", exist_ok=True)
 
