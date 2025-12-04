@@ -235,12 +235,13 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                             data = json.loads(message["text"])
                             if data.get("type") == "system_event" and data.get("event") == "lesson_started":
                                 logger.info("Realtime: Received lesson_started. Triggering greeting...")
+                                user_name = profile.name if profile and profile.name else "Student"
                                 await openai_ws.send(json.dumps({
                                     "type": "conversation.item.create",
                                     "item": {
                                         "type": "message",
                                         "role": "user",
-                                        "content": [{"type": "input_text", "text": "Start the lesson now. Greet me."}]
+                                        "content": [{"type": "input_text", "text": f"System Event: Lesson Started. The student's name is {user_name}. Greet them and jump right into the lesson. Follow the Universal Greeting Protocol strictly."}]
                                     }
                                 }))
                                 await openai_ws.send(json.dumps({"type": "response.create"}))
@@ -532,15 +533,16 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                             from openai import AsyncOpenAI
                             client = AsyncOpenAI(api_key=api_key)
                             
+                            user_name = profile.name if profile and profile.name else "Student"
                             greeting_prompt = conversation_history + [
-                                {"role": "system", "content": "The user has just started the lesson. Generate a warm, short greeting (1-2 sentences) based on the system instructions (language mode, etc). Do not ask complex questions yet, just welcome them."}
+                                {"role": "system", "content": f"System Event: Lesson Started. The student's name is {user_name}. Generate a greeting that follows the Universal Greeting Protocol. Brief, warm, NO meta-questions. Start an activity immediately."}
                             ]
                             
                             try:
                                 completion = await client.chat.completions.create(
                                     model=settings.default_model,
                                     messages=greeting_prompt,
-                                    max_tokens=100
+                                    max_tokens=150
                                 )
                                 greeting_text = completion.choices[0].message.content
                             except Exception as e:
