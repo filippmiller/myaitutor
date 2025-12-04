@@ -239,9 +239,11 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
         
         # 4. Loops
         loop = asyncio.get_running_loop()
+        greeting_triggered = False  # Flag to prevent multiple greeting triggers
         
         async def frontend_to_openai():
             """Read from frontend WebSocket, convert, send to OpenAI."""
+            nonlocal greeting_triggered
             try:
                 while True:
                     message = await websocket.receive()
@@ -264,22 +266,45 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                                 # Could be used for future enhancements or logging
                             
                             elif data.get("type") == "system_event" and data.get("event") == "lesson_started":
+                                if greeting_triggered:
+                                    logger.warning("Realtime: lesson_started received again, but greeting already sent - ignoring")
+                                    continue
+                                
+                                greeting_triggered = True
                                 logger.info("Realtime: Received lesson_started. Triggering greeting...")
+                                
                                 try:
                                     # System prompt already includes Universal Greeting Protocol
                                     # Trigger first interaction - OpenAI will follow the system prompt automatically
                                     user_name = profile.name if profile and profile.name else "Student"
-                                    greeting_trigger = json.dumps({
+                                    greeting_text = f"System Event: Lesson Starting Now. This is the FIRST interaction with the student. The student's name is {user_name}. Follow the Universal Greeting Protocol strictly: greet them warmly using their name, mention any last session summary if available, and start an immediate activity without asking meta-questions."
+                                    
+                                    greeting_trigger = {
                                         "type": "conversation.item.create",
                                         "item": {
                                             "type": "message",
                                             "role": "user",
-                                            "content": [{"type": "input_text", "text": f"System Event: Lesson Starting Now. This is the FIRST interaction with the student. The student's name is {user_name}. Follow the Universal Greeting Protocol strictly: greet them warmly using their name, mention any last session summary if available, and start an immediate activity without asking meta-questions."}]
+                                            "content": [{"type": "input_text", "text": greeting_text}]
                                         }
+                                    }
+                                    logger.info(f"Realtime: Sending greeting trigger message (length: {len(greeting_text)} chars)")
+                                    await openai_ws.send(json.dumps(greeting_trigger))
+                                    
+                                    # Wait for conversation item to be created
+                                    await asyncio.sleep(0.2)
+                                    
+                                    # Request response
+                                    response_request = {"type": "response.create"}
+                                    logger.info("Realtime: Requesting response creation...")
+                                    await openai_ws.send(json.dumps(response_request))
+                                    logger.info("Realtime: Greeting trigger and response request sent successfully")
+                                except Exception as greeting_error:
+                                    logger.error(f"Realtime: Failed to trigger greeting: {greeting_error}", exc_info=True)
+                                    await websocket.send_json({
+                                        "type": "system",
+                                        "level": "warning",
+                                        "message": f"Failed to trigger greeting: {str(greeting_error)}. The lesson will continue, but you may need to speak first."
                                     })
-                                    await openai_ws.send(greeting_trigger)
-                                    await openai_ws.send(json.dumps({"type": "response.create"}))
-                                    logger.info("Realtime: Greeting trigger sent successfully (relying on system prompt for protocol)")
                                 except Exception as greeting_error:
                                     logger.error(f"Realtime: Failed to trigger greeting: {greeting_error}", exc_info=True)
                                     await websocket.send_json({
@@ -323,10 +348,19 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
 
         async def openai_to_frontend():
             """Read from OpenAI, forward text/audio to frontend."""
+            audio_delta_count = 0
             try:
                 async for message in openai_ws:
                     event = json.loads(message)
                     event_type = event.get("type")
+                    
+                    # Log ALL events for debugging
+                    if event_type == "response.audio.delta":
+                        audio_delta_count += 1
+                        if audio_delta_count % 10 == 0:  # Log every 10th audio delta
+                            logger.info(f"Realtime: Received {audio_delta_count} audio deltas so far...")
+                    else:
+                        logger.info(f"Realtime: OpenAI event received - type: {event_type}")
                     
                     if event_type == "response.audio.delta":
                         # Received Audio Delta (PCM 24k Base64)
@@ -336,12 +370,18 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                             # Wrap in WAV (24k) and send
                             wav_data = add_wav_header(pcm_data, sample_rate=24000)
                             await websocket.send_bytes(wav_data)
+                            logger.debug(f"Realtime: Audio delta sent to frontend ({len(wav_data)} bytes)")
+                        else:
+                            logger.warning("Realtime: response.audio.delta received but delta is empty")
                             
                     elif event_type == "response.audio_transcript.delta":
                         # Received Text Delta
                         delta = event.get("delta")
                         if delta:
+                            logger.info(f"Realtime: Audio transcript delta received: '{delta[:50]}...'")
                             await websocket.send_json({"type": "transcript", "role": "assistant", "text": delta})
+                        else:
+                            logger.warning("Realtime: response.audio_transcript.delta received but delta is empty")
                             
                     elif event_type == "conversation.item.input_audio_transcription.completed":
                         # User transcript final
@@ -361,6 +401,12 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         # Session update confirmed by OpenAI
                         logger.info("Realtime: Session updated confirmed by OpenAI - system prompt is now active")
                     
+                    elif event_type == "conversation.item.created":
+                        # Conversation item created
+                        item_id = event.get("item", {}).get("id")
+                        item_type = event.get("item", {}).get("type")
+                        logger.info(f"Realtime: Conversation item created (ID: {item_id}, Type: {item_type})")
+                    
                     elif event_type == "response.created":
                         # Response started
                         response_id = event.get("response", {}).get("id")
@@ -373,21 +419,45 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         
                     elif event_type == "response.output_item.added":
                         # Output item added (for tracking)
-                        item_id = event.get("item", {}).get("id")
-                        item_type = event.get("item", {}).get("type")
-                        logger.debug(f"Realtime: Output item added (ID: {item_id}, Type: {item_type})")
+                        item = event.get("item", {})
+                        item_id = item.get("id")
+                        item_type = item.get("type")
+                        logger.info(f"Realtime: Output item added (ID: {item_id}, Type: {item_type})")
+                        logger.info(f"Realtime: Output item structure: {json.dumps(item, default=str)[:500]}")
+                        
+                        # Check if transcript is in the added item
+                        content = item.get("content", [])
+                        for part in content:
+                            if "transcript" in part:
+                                logger.info(f"Realtime: Found transcript in added item: {part.get('transcript', '')[:100]}")
+                            if "text" in part:
+                                logger.info(f"Realtime: Found text in added item: {part.get('text', '')[:100]}")
                     
                     elif event_type == "response.output_item.done":
                         # Item done, extract transcript and save it
+                        logger.info(f"Realtime: response.output_item.done received, extracting transcript...")
                         item = event.get("item", {})
                         content = item.get("content", [])
                         transcript = None
                         
+                        logger.info(f"Realtime: Item content structure: {json.dumps(item, default=str)[:500]}")
+                        
                         if content:
                             for part in content:
+                                logger.info(f"Realtime: Processing content part: type={part.get('type')}, keys={list(part.keys())}")
                                 if part.get("type") == "audio" and "transcript" in part:
                                     transcript = part["transcript"]
+                                    logger.info(f"Realtime: Found transcript in audio part: '{transcript[:100]}...'")
                                     break
+                                elif part.get("type") == "text" and "text" in part:
+                                    transcript = part["text"]
+                                    logger.info(f"Realtime: Found transcript in text part: '{transcript[:100]}...'")
+                                    break
+                        else:
+                            logger.warning(f"Realtime: response.output_item.done has no content array")
+                            
+                        if not transcript:
+                            logger.warning(f"Realtime: response.output_item.done - no transcript found in item structure")
                         
                         if transcript:
                             # Always save Assistant Turn (greeting, normal responses, etc.)
@@ -423,7 +493,7 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         logger.error(f"OpenAI Realtime Error: {event}")
                     else:
                         # Log unhandled events for debugging
-                        logger.debug(f"Realtime: Unhandled event type: {event_type}")
+                        logger.warning(f"Realtime: Unhandled event type: {event_type}, full event: {json.dumps(event, default=str)[:500]}")
                         
             except Exception as e:
                 logger.error(f"OpenAI->Frontend Error: {e}")
