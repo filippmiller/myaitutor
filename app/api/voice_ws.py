@@ -353,7 +353,7 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
 
         async def openai_to_frontend():
             """Read from OpenAI, forward text/audio to frontend."""
-            nonlocal greeting_item_id
+            nonlocal greeting_item_id, greeting_item_ready
             audio_delta_count = 0
             try:
                 async for message in openai_ws:
@@ -415,11 +415,12 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         logger.info(f"Realtime: Conversation item created (ID: {item_id}, Type: {item_type})")
                         
                         # Only signal ready for greeting item (first user message)
-                        if item_type == "message" and item.get("role") == "user" and greeting_item_id is None:
-                            nonlocal greeting_item_id
-                            greeting_item_id = item_id
-                            logger.info(f"Realtime: Greeting conversation item ready (ID: {item_id}), setting ready event...")
-                            greeting_item_ready.set()
+                        if item_type == "message" and item.get("role") == "user":
+                            # Check if this is the greeting item (first user message)
+                            if greeting_item_id is None:
+                                greeting_item_id = item_id
+                                logger.info(f"Realtime: Greeting conversation item ready (ID: {item_id}), setting ready event...")
+                                greeting_item_ready.set()
                     
                     elif event_type == "response.created":
                         # Response started
