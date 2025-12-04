@@ -232,6 +232,7 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                     elif "text" in message:
                         # Handle control messages
                         try:
+                            logger.info(f"Realtime: Received text message: {message['text']}")
                             data = json.loads(message["text"])
                             if data.get("type") == "system_event" and data.get("event") == "lesson_started":
                                 logger.info("Realtime: Received lesson_started. Triggering greeting...")
@@ -525,6 +526,7 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                     await loop.run_in_executor(None, converter.write, data)
                 elif "text" in message:
                     try:
+                        logger.info(f"Legacy: Received text message: {message['text']}")
                         data = json.loads(message["text"])
                         if data.get("type") == "system_event" and data.get("event") == "lesson_started":
                             logger.info("Legacy: Received lesson_started. Generating greeting...")
