@@ -230,8 +230,22 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                         input_converter.stdin.write(data)
                         input_converter.stdin.flush()
                     elif "text" in message:
-                        # Handle control messages if any
-                        pass
+                        # Handle control messages
+                        try:
+                            data = json.loads(message["text"])
+                            if data.get("type") == "system_event" and data.get("event") == "lesson_started":
+                                logger.info("Realtime: Received lesson_started. Triggering greeting...")
+                                await openai_ws.send(json.dumps({
+                                    "type": "conversation.item.create",
+                                    "item": {
+                                        "type": "message",
+                                        "role": "user",
+                                        "content": [{"type": "input_text", "text": "Start the lesson now. Greet me."}]
+                                    }
+                                }))
+                                await openai_ws.send(json.dumps({"type": "response.create"}))
+                        except Exception as e:
+                            logger.error(f"Realtime: Error handling text message: {e}")
             except WebSocketDisconnect:
                 pass
             except Exception as e:
@@ -327,18 +341,8 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
             asyncio.create_task(openai_to_frontend())
         ]
         
-        # Send initial greeting trigger
-        # We explicitly tell the model to start the lesson.
-        logger.info("Sending initial trigger message...")
-        await openai_ws.send(json.dumps({
-            "type": "conversation.item.create",
-            "item": {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "Start the lesson now. Greet me."}]
-            }
-        }))
-        await openai_ws.send(json.dumps({"type": "response.create"}))
+        # Wait for tasks
+        # Note: We removed the immediate greeting trigger here because we now wait for 'lesson_started' event.
 
         await asyncio.gather(*tasks)
 
@@ -483,8 +487,20 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                     data = message["bytes"]
                     await loop.run_in_executor(None, converter.write, data)
                 elif "text" in message:
-                    # Handle config/start events if needed
-                    pass
+                    try:
+                        data = json.loads(message["text"])
+                        if data.get("type") == "system_event" and data.get("event") == "lesson_started":
+                            logger.info("Legacy: Received lesson_started. Generating greeting...")
+                            greeting_text = "Hello! I am your AI tutor. Let's start our lesson. What would you like to talk about?"
+                            
+                            # Send text
+                            await websocket.send_json({"type": "transcript", "role": "assistant", "text": greeting_text})
+                            conversation_history.append({"role": "assistant", "content": greeting_text})
+                            
+                            # Send audio
+                            await synthesize_and_send(greeting_text)
+                    except Exception as e:
+                        logger.error(f"Legacy: Error handling text message: {e}")
         except WebSocketDisconnect:
             pass
         finally:
