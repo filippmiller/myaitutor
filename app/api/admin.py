@@ -7,6 +7,11 @@ from pydantic import BaseModel
 import openai
 import requests
 
+import os
+import json
+from datetime import datetime
+from glob import glob
+
 router = APIRouter()
 
 class SettingsUpdate(BaseModel):
@@ -392,6 +397,79 @@ def get_voice_stack(
         },
         "latency": stats
     }
+
+# --- Voice Stack / Latency ---
+
+@router.get("/voice/stack")
+def get_voice_stack(
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    settings = session.get(AppSettings, 1)
+    
+    # Get stats
+    from app.api.voice_ws import get_latency_stats
+    stats = get_latency_stats()
+    
+    return {
+        "stt": {
+            "provider": "openai-realtime" if not settings else "openai (whisper)", # Simplified view
+            "model": "whisper-1",
+            "streaming": True
+        },
+        "tts": {
+            "provider": "openai/yandex",
+            "model": "tts-1/yandex",
+            "streaming": True
+        },
+        "latency": stats
+    }
+
+# --- Lesson Prompt Logs ---
+
+@router.get("/lesson-prompts")
+def list_lesson_prompts(
+    limit: int = 50,
+    user_id: int | None = None,
+    current_user: UserAccount = Depends(get_current_user),
+):
+    """Return recent lesson prompt snapshots (system + greeting prompts).
+
+    Logs are stored as JSON files in static/prompts and are intentionally kept
+    outside the DB schema so we can iterate quickly on prompt engineering.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    prompts_dir = os.path.join(os.getcwd(), "static", "prompts")
+    if not os.path.exists(prompts_dir):
+        return []
+
+    items = []
+    pattern = os.path.join(prompts_dir, "lesson_*_prompt.json")
+    for path in glob(pattern):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Attach file-based timestamp if JSON doesn't have one
+            if "created_at" not in data:
+                ts = datetime.fromtimestamp(os.path.getmtime(path))
+                data["created_at"] = ts.isoformat()
+            # Filter by user_id if provided
+            if user_id is not None and data.get("user_account_id") != user_id:
+                continue
+            items.append(data)
+        except Exception as e:
+            # Don't break the endpoint because of one bad file
+            print(f"Failed to read lesson prompt log {path}: {e}")
+            continue
+
+    # Sort newest first
+    items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return items[:limit]
 
 # --- Beginner Rules Management ---
 

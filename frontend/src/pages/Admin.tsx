@@ -7,6 +7,7 @@ import AdminAnalytics from '../components/AdminAnalytics';
 import AIChatPanel from '../components/AIChatPanel';
 import AdminAIRules from '../components/AdminAIRules';
 import AdminBeginnerRules from '../components/AdminBeginnerRules';
+import AdminLessonPrompts from '../components/AdminLessonPrompts';
 
 export default function Admin() {
     const [activeTab, setActiveTab] = useState('settings');
@@ -98,6 +99,12 @@ export default function Admin() {
                 >
                     Analytics
                 </button>
+                <button
+                    onClick={() => setActiveTab('lesson-prompts')}
+                    style={{ background: activeTab === 'lesson-prompts' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px', whiteSpace: 'nowrap' }}
+                >
+                    Lesson Prompts
+                </button>
             </div>
 
             {activeTab === 'settings' && (
@@ -158,6 +165,7 @@ export default function Admin() {
             {activeTab === 'analytics' && <AdminAnalytics />}
             {activeTab === 'ai-rules' && <AdminAIRules />}
             {activeTab === 'beginner-rules' && <AdminBeginnerRules />}
+            {activeTab === 'lesson-prompts' && <AdminLessonPrompts />}
 
             {/* Floating AI Button */}
             {

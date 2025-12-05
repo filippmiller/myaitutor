@@ -41,6 +41,24 @@ def get_latency_stats():
         "samples": len(LATENCY_STATS["tts"])
     }
 
+# Prompt logging (per lesson session)
+PROMPT_LOG_DIR = os.path.join("static", "prompts")
+
+def save_lesson_prompt_log(data: dict) -> None:
+    """Persist a snapshot of the system + greeting prompt for a lesson.
+
+    Stored as JSON in static/prompts/lesson_<lesson_id>_prompt.json so it can be
+    inspected from the Admin panel without touching the DB schema.
+    """
+    try:
+        os.makedirs(PROMPT_LOG_DIR, exist_ok=True)
+        lesson_id = data.get("lesson_session_id") or "unknown"
+        file_path = os.path.join(PROMPT_LOG_DIR, f"lesson_{lesson_id}_prompt.json")
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to write prompt log for lesson {data.get('lesson_session_id')}: {e}")
+
 router = APIRouter()
 
 @router.websocket("/ws/echo")
@@ -57,14 +75,14 @@ async def echo_websocket(websocket: WebSocket):
 async def voice_websocket(websocket: WebSocket):
     await websocket.accept()
     logger.info(f"WebSocket connection accepted from {websocket.client}")
-    logger.info("Voice WS Version: 2025-12-03 Realtime + Fallback")
+    logger.info("Voice WS Version: 2025-12-05 Realtime (gpt-realtime) + Fallback")
     
     # Manually create session
     from app.database import engine
     session = Session(engine)
     
-    user = None
-    profile = None
+    user: Optional[UserAccount] = None
+    profile: Optional[UserProfile] = None
     api_key = None
     settings = None
     
@@ -119,8 +137,8 @@ async def voice_websocket(websocket: WebSocket):
         
         if use_realtime:
             try:
-                logger.info("Attempting OpenAI Realtime Session...")
-                await run_realtime_session(websocket, api_key, voice_id, profile, session)
+                logger.info("Attempting OpenAI Realtime Session with model 'gpt-realtime' (audio+text)...")
+                await run_realtime_session(websocket, api_key, voice_id, profile, session, user=user)
                 return # If successful and finishes normally
             except Exception as e:
                 logger.error(f"Realtime Session failed: {e}", exc_info=True)
@@ -134,7 +152,7 @@ async def voice_websocket(websocket: WebSocket):
              # Create a dummy/default profile if needed or handle inside run_legacy_session
              # For now, we'll let it proceed but we should be aware.
              
-        await run_legacy_session(websocket, api_key, tts_engine_name, voice_id, profile, settings, session)
+        await run_legacy_session(websocket, api_key, tts_engine_name, voice_id, profile, settings, session, user=user)
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
@@ -145,10 +163,15 @@ async def voice_websocket(websocket: WebSocket):
         logger.info("Cleanup complete")
 
 
-async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str, profile: UserProfile | None, session: Session):
-    """
-    Manages a session with OpenAI Realtime API.
-    """
+async def run_realtime_session(
+    websocket: WebSocket,
+    api_key: str,
+    voice_id: str,
+    profile: UserProfile | None,
+    session: Session,
+    user: UserAccount | None = None,
+):
+    """Manage a session with the latest OpenAI Realtime API (gpt-realtime)."""
     import subprocess
     import shutil
     from datetime import datetime
@@ -159,9 +182,9 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
 
     # Create LessonSession
     lesson_session = LessonSession(
-        user_account_id=profile.user_account_id if profile else None,
+        user_account_id=profile.user_account_id if profile else (user.id if user else None),
         started_at=datetime.utcnow(),
-        language_mode=None # Will be set by interaction
+        language_mode=None,  # Will be set by interaction
     )
     session.add(lesson_session)
     session.commit()
@@ -169,44 +192,70 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
     logger.info(f"Created Realtime LessonSession {lesson_session.id}")
 
     # Build System Prompt
-    system_instructions = build_tutor_system_prompt(session, profile, lesson_session_id=lesson_session.id)
+    system_prompt = build_tutor_system_prompt(session, profile, lesson_session_id=lesson_session.id)
     
     # Log system prompt details
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info("SYSTEM PROMPT BUILT:")
     logger.info(f"  Student Name: {profile.name if profile else 'None'}")
     logger.info(f"  Student Level: {profile.english_level if profile else 'None'}")
     logger.info(f"  Lesson Session ID: {lesson_session.id}")
-    logger.info(f"  System Prompt Length: {len(system_instructions)} characters")
-    logger.info(f"  System Prompt (First 500 chars):\n{system_instructions[:500]}")
-    logger.info("="*80)
+    logger.info(f"  System Prompt Length: {len(system_prompt)} characters")
+    logger.info(f"  System Prompt (First 500 chars):\n{system_prompt[:500]}")
+    logger.info("=" * 80)
 
-    # 1. Connect to OpenAI
-    url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
+    # Prepare prompt log snapshot (we'll fill greeting + STT config later)
+    prompt_log_data = {
+        "mode": "realtime",
+        "lesson_session_id": lesson_session.id,
+        "user_account_id": profile.user_account_id if profile else (user.id if user else None),
+        "user_email": getattr(user, "email", None) if user else None,
+        "student_name": profile.name if profile else None,
+        "english_level": profile.english_level if profile else None,
+        "tts_engine": "openai",
+        "voice_id": voice_id,
+        "stt_language": None,
+        "system_prompt": system_prompt,
+        "greeting_event_prompt": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    # 1. Connect to OpenAI Realtime (latest model alias)
+    url = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "OpenAI-Beta": "realtime=v1"
     }
     
     async with websockets.connect(url, additional_headers=headers) as openai_ws:
-        logger.info("Connected to OpenAI Realtime API")
+        logger.info("Connected to OpenAI Realtime API (model=gpt-realtime)")
         
         # 2. Configure Session
+        # Use audio PCM16 24kHz in and out; enable server-side VAD.
         session_update = {
             "type": "session.update",
             "session": {
                 "modalities": ["text", "audio"],
-                "instructions": system_instructions,
-                "voice": voice_id if voice_id in ["alloy", "echo", "shimmer", "ash", "ballad", "coral", "sage", "verse"] else "alloy",
+                "instructions": system_prompt,
+                "voice": voice_id if voice_id in [
+                    "alloy",
+                    "echo",
+                    "shimmer",
+                    "ash",
+                    "ballad",
+                    "coral",
+                    "sage",
+                    "verse",
+                ]
+                else "alloy",
                 "input_audio_format": "pcm16",
                 "output_audio_format": "pcm16",
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.3, # Lowered from 0.5 for better sensitivity
+                    "threshold": 0.3,  # Lowered from 0.5 for better sensitivity
                     "prefix_padding_ms": 300,
-                    "silence_duration_ms": 500
-                }
-            }
+                    "silence_duration_ms": 500,
+                },
+            },
         }
         await openai_ws.send(json.dumps(session_update))
         logger.info("Realtime: session.update sent to OpenAI with system prompt")
@@ -216,11 +265,13 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
         logger.info("Realtime: Session should be ready, sending ready signal to frontend")
         
         # Send ready signal to frontend
-        await websocket.send_json({
-            "type": "system",
-            "level": "info",
-            "message": "Session ready. You can now start the lesson."
-        })
+        await websocket.send_json(
+            {
+                "type": "system",
+                "level": "info",
+                "message": "Session ready. You can now start the lesson.",
+            }
+        )
         
         # 3. Audio Converters
         # Frontend (WebM) -> PCM 24k (OpenAI)
@@ -228,13 +279,21 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
         input_converter = subprocess.Popen(
             [
                 ffmpeg_path,
-                "-i", "pipe:0",
-                "-f", "s16le", "-acodec", "pcm_s16le", "-ar", "24000", "-ac", "1",
-                "pipe:1"
+                "-i",
+                "pipe:0",
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "24000",
+                "-ac",
+                "1",
+                "pipe:1",
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
         )
         
         # 4. Loops
@@ -242,10 +301,11 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
         greeting_triggered = False  # Flag to prevent multiple greeting triggers
         greeting_item_ready = asyncio.Event()  # Event to signal when greeting conversation item is ready
         greeting_item_id = None  # Store the greeting item ID
+        stt_language = "en-US"  # Logged from config message
         
         async def frontend_to_openai():
             """Read from frontend WebSocket, convert, send to OpenAI."""
-            nonlocal greeting_triggered, greeting_item_id
+            nonlocal greeting_triggered, greeting_item_id, prompt_log_data, stt_language
             try:
                 while True:
                     message = await websocket.receive()
@@ -263,6 +323,7 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                             # Handle config message
                             if data.get("type") == "config":
                                 stt_language = data.get("stt_language", "en-US")
+                                prompt_log_data["stt_language"] = stt_language
                                 logger.info(f"Realtime: Config received - STT Language: {stt_language}")
                                 # In Realtime mode, OpenAI handles STT internally, but we log it for reference
                                 # Could be used for future enhancements or logging
@@ -279,7 +340,17 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                                     # System prompt already includes Universal Greeting Protocol
                                     # Trigger first interaction - OpenAI will follow the system prompt automatically
                                     user_name = profile.name if profile and profile.name else "Student"
-                                    greeting_text = f"System Event: Lesson Starting Now. This is the FIRST interaction with the student. The student's name is {user_name}. Follow the Universal Greeting Protocol strictly: greet them warmly using their name, mention any last session summary if available, and start an immediate activity without asking meta-questions."
+                                    greeting_text = (
+                                        "System Event: Lesson Starting Now. This is the FIRST interaction with the "
+                                        f"student. The student's name is {user_name}. Follow the Universal Greeting "
+                                        "Protocol strictly: greet them warmly using their name, mention any last "
+                                        "session summary if available, and start an immediate activity without "
+                                        "asking meta-questions."
+                                    )
+                                    
+                                    # Update prompt log with the concrete greeting event prompt
+                                    prompt_log_data["greeting_event_prompt"] = greeting_text
+                                    save_lesson_prompt_log(prompt_log_data)
                                     
                                     greeting_trigger = {
                                         "type": "conversation.item.create",
@@ -373,14 +444,14 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                     event_type = event.get("type")
                     
                     # Log ALL events for debugging
-                    if event_type == "response.audio.delta":
+                    if event_type in ("response.audio.delta", "response.output_audio.delta"):
                         audio_delta_count += 1
                         if audio_delta_count % 10 == 0:  # Log every 10th audio delta
                             logger.info(f"Realtime: Received {audio_delta_count} audio deltas so far...")
                     else:
                         logger.info(f"Realtime: OpenAI event received - type: {event_type}")
                     
-                    if event_type == "response.audio.delta":
+                    if event_type in ("response.audio.delta", "response.output_audio.delta"):
                         # Received Audio Delta (PCM 24k Base64)
                         b64_audio = event.get("delta")
                         if b64_audio:
@@ -390,16 +461,19 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                             await websocket.send_bytes(wav_data)
                             logger.debug(f"Realtime: Audio delta sent to frontend ({len(wav_data)} bytes)")
                         else:
-                            logger.warning("Realtime: response.audio.delta received but delta is empty")
+                            logger.warning("Realtime: audio delta received but delta is empty")
                             
-                    elif event_type == "response.audio_transcript.delta":
+                    elif event_type in (
+                        "response.audio_transcript.delta",
+                        "response.output_audio_transcript.delta",
+                    ):
                         # Received Text Delta
                         delta = event.get("delta")
                         if delta:
                             logger.info(f"Realtime: Audio transcript delta received: '{delta[:50]}...'")
                             await websocket.send_json({"type": "transcript", "role": "assistant", "text": delta})
                         else:
-                            logger.warning("Realtime: response.audio_transcript.delta received but delta is empty")
+                            logger.warning("Realtime: audio transcript delta received but delta is empty")
                             
                     elif event_type == "conversation.item.input_audio_transcription.completed":
                         # User transcript final
@@ -528,14 +602,35 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                                         logger.info(f"Realtime: Language level increased to {lesson_session.language_level}")
 
                     elif event_type == "error":
-                        logger.error(f"OpenAI Realtime Error: {event}")
+                        # Treat Realtime errors as fatal so we can fall back cleanly.
+                        logger.error(f"OpenAI Realtime Error event: {json.dumps(event, default=str)[:500]}")
+                        # Surface a readable message to the frontend for debugging.
+                        error_obj = event.get("error") or {}
+                        message = error_obj.get("message") or str(event)
+                        try:
+                            await websocket.send_json(
+                                {
+                                    "type": "system",
+                                    "level": "error",
+                                    "message": f"OpenAI Realtime error: {message}",
+                                }
+                            )
+                        except Exception:
+                            # If WS to frontend is already closing, just continue shutdown.
+                            pass
+                        # Raise to trigger fallback to legacy mode in the caller.
+                        raise RuntimeError(f"OpenAI Realtime error: {message}")
                     else:
                         # Log unhandled events for debugging
-                        logger.warning(f"Realtime: Unhandled event type: {event_type}, full event: {json.dumps(event, default=str)[:500]}")
+                        logger.warning(
+                            "Realtime: Unhandled event type: %s, full event: %s",
+                            event_type,
+                            json.dumps(event, default=str)[:500],
+                        )
                         
             except Exception as e:
                 logger.error(f"OpenAI->Frontend Error: {e}")
-                raise e # Trigger fallback
+                raise e  # Trigger fallback
 
         # Start tasks
         task_frontend_to_openai = asyncio.create_task(frontend_to_openai())
@@ -616,10 +711,17 @@ async def run_realtime_session(websocket: WebSocket, api_key: str, voice_id: str
                 logger.error(f"Realtime: Error during converter cleanup: {cleanup_error}")
 
 
-async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name: str, voice_id: str, profile: UserProfile | None, settings: AppSettings, session: Session):
-    """
-    Legacy implementation using VAD + Whisper + TTS (OpenAI/Yandex).
-    """
+async def run_legacy_session(
+    websocket: WebSocket,
+    api_key: str,
+    tts_engine_name: str,
+    voice_id: str,
+    profile: UserProfile | None,
+    settings: AppSettings,
+    session: Session,
+    user: UserAccount | None = None,
+):
+    """Legacy implementation using VAD + Whisper + TTS (OpenAI/Yandex)."""
     # Initialize Services
     try:
         yandex_service = YandexService() # Still used for fallback TTS potentially
@@ -633,7 +735,7 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
     # Create LessonSession
     from datetime import datetime
     lesson_session = LessonSession(
-        user_account_id=profile.user_account_id if profile else None,
+        user_account_id=profile.user_account_id if profile else (user.id if user else None),
         started_at=datetime.utcnow(),
         language_mode=None # Will be set by interaction
     )
@@ -644,6 +746,22 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
 
     # Build System Prompt
     system_prompt = build_tutor_system_prompt(session, profile, lesson_session_id=lesson_session.id)
+
+    # Prepare prompt log snapshot (filled with greeting + STT later)
+    prompt_log_data = {
+        "mode": "legacy",
+        "lesson_session_id": lesson_session.id,
+        "user_account_id": profile.user_account_id if profile else (user.id if user else None),
+        "user_email": getattr(user, "email", None) if user else None,
+        "student_name": profile.name if profile else None,
+        "english_level": profile.english_level if profile else None,
+        "tts_engine": tts_engine_name,
+        "voice_id": voice_id,
+        "stt_language": None,
+        "system_prompt": system_prompt,
+        "greeting_event_prompt": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
 
     # State
     conversation_history = [
@@ -781,6 +899,7 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                         # Handle config message
                         if data.get("type") == "config":
                             stt_language = data.get("stt_language", "en-US")
+                            prompt_log_data["stt_language"] = stt_language
                             logger.info(f"Legacy: Config received - STT Language: {stt_language}")
                             # Store in session state if needed (currently not used in Legacy VAD+Whisper mode)
                         
@@ -793,9 +912,18 @@ async def run_legacy_session(websocket: WebSocket, api_key: str, tts_engine_name
                                 client = AsyncOpenAI(api_key=api_key)
                                 
                                 user_name = profile.name if profile and profile.name else "Student"
+                                greeting_system_message = (
+                                    f"System Event: Lesson Started. The student's name is {user_name}. "
+                                    "Generate a greeting that follows the Universal Greeting Protocol. Brief, warm, "
+                                    "NO meta-questions. Start an activity immediately."
+                                )
                                 greeting_prompt = conversation_history + [
-                                    {"role": "system", "content": f"System Event: Lesson Started. The student's name is {user_name}. Generate a greeting that follows the Universal Greeting Protocol. Brief, warm, NO meta-questions. Start an activity immediately."}
+                                    {"role": "system", "content": greeting_system_message}
                                 ]
+                                
+                                # Update prompt log with the concrete greeting event prompt
+                                prompt_log_data["greeting_event_prompt"] = greeting_system_message
+                                save_lesson_prompt_log(prompt_log_data)
                                 
                                 try:
                                     completion = await client.chat.completions.create(
