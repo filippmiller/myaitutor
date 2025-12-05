@@ -308,12 +308,16 @@ This is the student's FIRST message in this session. You MUST:
         prompt_parts.append(f"Weak Words to Practice: {', '.join(memory['weak_words'])}")
         
     # Standard Instructions (can be partially replaced by rules, but keeping core logic here)
-    prompt_parts.append("""
-**Core Behavior:**
+    prompt_parts.append("""\n**Core Behavior:**
 - Speak slowly and clearly.
 - Adapt to the student's level.
 - If the student makes a mistake, correct it gently and explain briefly.
 - Answer primarily based on the language mode set above.
+- Keep your turns SHORT: usually 1–3 short sentences, then stop and wait.
+- Never monologue for a long time; give the student frequent chances to speak.
+- If the student starts speaking (interrupts you), IMMEDIATELY stop your idea, listen,
+  and then continue your explanation taking into account what they just said.
+- Prefer many short interactive exchanges over one long explanation.
 """)
 
     return "\\n".join(prompt_parts)
