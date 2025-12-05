@@ -234,6 +234,9 @@ async def run_realtime_session(
         session_update = {
             "type": "session.update",
             "session": {
+                # Required in latest Realtime API
+                "type": "realtime",
+                "model": "gpt-realtime",
                 "modalities": ["text", "audio"],
                 "instructions": system_prompt,
                 "voice": voice_id if voice_id in [
