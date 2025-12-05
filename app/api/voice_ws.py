@@ -237,25 +237,36 @@ async def run_realtime_session(
                 # Required in latest Realtime API
                 "type": "realtime",
                 "model": "gpt-realtime",
+                # New-style Realtime audio configuration
+                "output_modalities": ["audio"],
                 "instructions": system_prompt,
-                "voice": voice_id if voice_id in [
-                    "alloy",
-                    "echo",
-                    "shimmer",
-                    "ash",
-                    "ballad",
-                    "coral",
-                    "sage",
-                    "verse",
-                ]
-                else "alloy",
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": 0.3,  # Lowered from 0.5 for better sensitivity
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 500,
+                "audio": {
+                    "input": {
+                        "format": {
+                            "type": "audio/pcm",
+                            "rate": 24000,
+                        },
+                        # Let the server handle VAD based on semantics
+                        "turn_detection": {
+                            "type": "semantic_vad",
+                        },
+                    },
+                    "output": {
+                        "format": {
+                            "type": "audio/pcm",
+                        },
+                        "voice": voice_id if voice_id in [
+                            "alloy",
+                            "echo",
+                            "shimmer",
+                            "ash",
+                            "ballad",
+                            "coral",
+                            "sage",
+                            "verse",
+                        ]
+                        else "alloy",
+                    },
                 },
             },
         }
