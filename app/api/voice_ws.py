@@ -254,6 +254,7 @@ async def run_realtime_session(
                     "output": {
                         "format": {
                             "type": "audio/pcm",
+                            "rate": 24000,
                         },
                         "voice": voice_id if voice_id in [
                             "alloy",
