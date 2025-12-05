@@ -293,6 +293,22 @@ export default function Student() {
         }
     };
 
+    const renderMessageText = (t: { role: string; text: string }) => {
+        // For assistant messages, split long text into sentence-like chunks for readability.
+        if (t.role === 'assistant') {
+            // Split on sentence-ending punctuation followed by whitespace.
+            const parts = t.text.split(/(?<=[\.\!\?])\s+/);
+            return parts.map((part, idx) => (
+                <span key={idx}>
+                    {idx > 0 && <><br /><br /></>}
+                    {part}
+                </span>
+            ));
+        }
+        // For user messages, render as-is.
+        return t.text;
+    };
+
     return (
         <div>
             <div style={{ marginBottom: '1rem' }}>
@@ -404,7 +420,8 @@ export default function Student() {
                                     borderRadius: '8px',
                                     maxWidth: '80%'
                                 }}>
-                                    <strong>{t.role === 'user' ? 'You' : 'Tutor'}:</strong> {t.text}
+                                    <strong>{t.role === 'user' ? 'You' : 'Tutor'}:</strong>{' '}
+                                    {renderMessageText(t)}
                                 </div>
                             ))}
                             <div ref={chatEndRef} />
