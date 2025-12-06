@@ -31,10 +31,10 @@ interface HealthResponse {
     openai_key_set: boolean;
 }
 
-interface ChunkTranscriptionResponse {
-    text: string;
-}
-
+// Legacy interface from chunk-STT mode (now unused)
+// interface ChunkTranscriptionResponse {
+//     text: string;
+// }
 export default function AdminVoiceRules() {
     const [isRecording, setIsRecording] = useState(false);
     const [status, setStatus] = useState<string>('Idle');
@@ -47,6 +47,7 @@ export default function AdminVoiceRules() {
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const transcriptRef = useRef<string>('');
+    const audioChunksRef = useRef<Blob[]>([]);
 
     const checkHealth = async (): Promise<boolean> => {
         setStatus('Checking backend health...');
@@ -90,22 +91,26 @@ export default function AdminVoiceRules() {
             const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
             mediaRecorderRef.current = mediaRecorder;
 
+            audioChunksRef.current = [];
+
             mediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0) {
-                    // Send chunk for near-realtime transcription
-                    sendChunkForTranscription(e.data);
+                    // Просто накапливаем чанки, чтобы потом отправить один цельный файл
+                    audioChunksRef.current.push(e.data);
                 }
             };
 
             mediaRecorder.onstop = () => {
-                // Stop all tracks
+                // Останавливаем треки микрофона
                 mediaRecorder.stream.getTracks().forEach((t) => t.stop());
-                setStatus('Generating rules from transcript...');
-                void generateRulesFromTranscript();
+
+                const fullBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                setStatus('Transcribing & generating rules...');
+                void transcribeAndDraft(fullBlob);
             };
 
-            // small timeslice so we get chunks during recording
-            mediaRecorder.start(2000);
+            // Без timeslice: один цельный blob по завершении записи
+            mediaRecorder.start();
             setIsRecording(true);
             setStatus('Recording...');
         } catch (e: any) {
@@ -122,12 +127,12 @@ export default function AdminVoiceRules() {
         mediaRecorderRef.current.stop();
     };
 
-    const sendChunkForTranscription = async (chunk: Blob) => {
+    const transcribeAndDraft = async (blob: Blob) => {
         try {
             const form = new FormData();
-            form.append('audio_file', chunk, 'chunk.webm');
+            form.append('audio_file', blob, 'recording.webm');
 
-            const res = await fetch('/api/admin/voice-rules/transcribe-chunk', {
+            const res = await fetch('/api/admin/voice-rules/transcribe-and-draft', {
                 method: 'POST',
                 body: form,
             });
@@ -137,47 +142,8 @@ export default function AdminVoiceRules() {
                 throw new Error(err.detail || res.statusText);
             }
 
-            const data: ChunkTranscriptionResponse = await res.json();
-            if (data.text) {
-                setTranscript((prev) => {
-                    const next = prev ? `${prev} ${data.text}` : data.text;
-                    transcriptRef.current = next;
-                    return next;
-                });
-            }
-        } catch (e: any) {
-            console.error(e);
-            setError(`Live transcription failed: ${String(e)}`);
-            setStatus('Error');
-        }
-    };
-
-    const generateRulesFromTranscript = async () => {
-        const finalTranscript = transcriptRef.current.trim();
-        if (!finalTranscript) {
-            setStatus('Idle');
-            setError('Transcript is empty, nothing to generate.');
-            return;
-        }
-
-        setStatus('Generating rules from transcript...');
-        try {
-            const body = { transcript: finalTranscript };
-
-            const res = await fetch('/api/admin/voice-rules/generate-from-text', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
-
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || res.statusText);
-            }
-
             const data: DraftResponse = await res.json();
-            // Keep transcript as we already built it live, but if backend normalized it,
-            // we can prefer the backend version.
+
             if (data.transcript) {
                 transcriptRef.current = data.transcript;
                 setTranscript(data.transcript);
@@ -188,12 +154,13 @@ export default function AdminVoiceRules() {
                 priority: (r as any).priority ?? 0,
                 selected: true,
             }));
+
             setRules(draftRules);
             setGenerationLogId(data.generation_log_id);
             setStatus('Draft ready');
         } catch (e: any) {
             console.error(e);
-            setError(`Failed to generate rules: ${String(e)}`);
+            setError(`Failed to transcribe and generate rules: ${String(e)}`);
             setStatus('Error');
         }
     };
