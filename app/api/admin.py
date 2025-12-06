@@ -9,6 +9,8 @@ import os
 import json
 from datetime import datetime
 from glob import glob
+import os
+import json
 
 router = APIRouter()
 
@@ -491,6 +493,74 @@ def list_lesson_prompts(
     # Sort newest first
     items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return items[:limit]
+
+
+# --- Lesson OpenAI Traffic Logs ---
+
+@router.get("/lesson-logs")
+def get_lesson_logs(
+    lesson_session_id: int | None = None,
+    limit_lines: int = 500,
+    current_user: UserAccount = Depends(get_current_user),
+):
+    """Return OpenAI traffic logs for a given lesson, or list available logs.
+
+    Logs are stored as JSONL files in static/openai_logs/lesson_<id>.jsonl.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    logs_dir = os.path.join(os.getcwd(), "static", "openai_logs")
+    if not os.path.exists(logs_dir):
+        return [] if lesson_session_id is None else {"lesson_session_id": lesson_session_id, "entries": []}
+
+    # If no specific lesson requested, list available log files
+    if lesson_session_id is None:
+        files = []
+        for path in glob(os.path.join(logs_dir, "lesson_*.jsonl")):
+            try:
+                name = os.path.basename(path)
+                # lesson_<id>.jsonl
+                parts = name.split("_")
+                if len(parts) < 2:
+                    continue
+                id_part = parts[1].split(".")[0]
+                les_id = int(id_part)
+                ts = os.path.getmtime(path)
+                files.append({
+                    "lesson_session_id": les_id,
+                    "path": name,
+                    "updated_at": datetime.fromtimestamp(ts).isoformat(),
+                })
+            except Exception:
+                continue
+        # newest first
+        files.sort(key=lambda x: x["lesson_session_id"], reverse=True)
+        return files
+
+    # Read specific lesson log
+    file_path = os.path.join(logs_dir, f"lesson_{lesson_session_id}.jsonl")
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Log file not found for this lesson")
+
+    entries: list[dict] = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        # take last N lines
+        for line in lines[-limit_lines:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                continue
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read log file: {str(e)}")
+
+    return {"lesson_session_id": lesson_session_id, "entries": entries}
+
 
 # --- Beginner Rules Management ---
 

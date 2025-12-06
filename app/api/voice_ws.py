@@ -41,6 +41,8 @@ def get_latency_stats():
 
 # Prompt logging (per lesson session)
 PROMPT_LOG_DIR = os.path.join("static", "prompts")
+OPENAI_LOG_DIR = os.path.join("static", "openai_logs")
+
 
 def save_lesson_prompt_log(data: dict) -> None:
     """Persist a snapshot of the system + greeting prompt for a lesson.
@@ -56,6 +58,28 @@ def save_lesson_prompt_log(data: dict) -> None:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error(f"Failed to write prompt log for lesson {data.get('lesson_session_id')}: {e}")
+
+
+def append_openai_log(lesson_session_id: int, entry: dict) -> None:
+    """Append a single OpenAI traffic record for a lesson as JSONL.
+
+    This is used only when debug logging is enabled, and stores a text-only
+    view of the packets we exchange with OpenAI (no raw audio).
+    """
+    try:
+        os.makedirs(OPENAI_LOG_DIR, exist_ok=True)
+        from datetime import datetime as _dt
+
+        full_entry = dict(entry)
+        full_entry.setdefault("lesson_session_id", lesson_session_id)
+        full_entry.setdefault("ts", _dt.utcnow().isoformat())
+
+        file_path = os.path.join(OPENAI_LOG_DIR, f"lesson_{lesson_session_id}.jsonl")
+        with open(file_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(full_entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.error(f"Failed to append OpenAI log for lesson {lesson_session_id}: {e}")
+
 
 router = APIRouter()
 
@@ -264,12 +288,23 @@ async def run_realtime_session(
             return
         try:
             clean = _scrub_audio_fields(payload)
-            await websocket.send_json({
+            debug_packet = {
                 "type": "debug",
                 "direction": direction,
                 "channel": channel,
                 "payload": clean,
-            })
+            }
+            # Send to frontend live
+            await websocket.send_json(debug_packet)
+            # Persist to file per-lesson
+            try:
+                append_openai_log(lesson_session.id, {
+                    "direction": direction,
+                    "channel": channel,
+                    "payload": clean,
+                })
+            except Exception as log_err:
+                logger.error(f"Failed to append_openai_log: {log_err}")
         except Exception as e:
             logger.error(f"Failed to send debug packet: {e}")
 
@@ -970,12 +1005,21 @@ async def run_legacy_session(
             return
         try:
             clean = _scrub_audio_fields_legacy(payload)
-            await websocket.send_json({
+            debug_packet = {
                 "type": "debug",
                 "direction": direction,
                 "channel": channel,
                 "payload": clean,
-            })
+            }
+            await websocket.send_json(debug_packet)
+            try:
+                append_openai_log(lesson_session.id, {
+                    "direction": direction,
+                    "channel": channel,
+                    "payload": clean,
+                })
+            except Exception as log_err:
+                logger.error(f"Legacy: Failed to append_openai_log: {log_err}")
         except Exception as e:
             logger.error(f"Legacy: failed to send debug packet: {e}")
 

@@ -15,11 +15,21 @@ interface LessonPromptLog {
     created_at?: string;
 }
 
+interface LessonTrafficEntry {
+    ts?: string;
+    direction: string;
+    channel: string;
+    payload: any;
+}
+
 export default function AdminLessonPrompts() {
     const [logs, setLogs] = useState<LessonPromptLog[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [selected, setSelected] = useState<LessonPromptLog | null>(null);
+    const [traffic, setTraffic] = useState<LessonTrafficEntry[]>([]);
+    const [trafficLoading, setTrafficLoading] = useState(false);
+    const [trafficError, setTrafficError] = useState<string | null>(null);
 
     const loadLogs = async () => {
         setLoading(true);
@@ -43,6 +53,39 @@ export default function AdminLessonPrompts() {
     useEffect(() => {
         loadLogs();
     }, []);
+
+    const prettyJson = (value: any) => {
+        try {
+            return JSON.stringify(value, null, 2);
+        } catch {
+            return String(value);
+        }
+    };
+
+    const loadTrafficForLesson = async (lessonId: number | undefined) => {
+        if (!lessonId) {
+            setTraffic([]);
+            setTrafficError(null);
+            return;
+        }
+        setTrafficLoading(true);
+        setTrafficError(null);
+        try {
+            const res = await fetch(`/api/admin/lesson-logs?lesson_session_id=${lessonId}&limit_lines=400`);
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || res.statusText);
+            }
+            const data = await res.json();
+            setTraffic(data.entries || []);
+        } catch (e: any) {
+            console.error(e);
+            setTrafficError(String(e));
+            setTraffic([]);
+        } finally {
+            setTrafficLoading(false);
+        }
+    };
 
     return (
         <div style={{ marginTop: '1rem' }}>
@@ -88,7 +131,10 @@ export default function AdminLessonPrompts() {
                                     <tr
                                         key={`${log.lesson_session_id}-${log.created_at}`}
                                         style={{ borderBottom: '1px solid #333', cursor: 'pointer' }}
-                                        onClick={() => setSelected(log)}
+                                        onClick={() => {
+                                            setSelected(log);
+                                            loadTrafficForLesson(log.lesson_session_id);
+                                        }}
                                     >
                                         <td style={{ padding: '4px' }}>{log.lesson_session_id ?? '-'}</td>
                                         <td style={{ padding: '4px' }}>
@@ -111,7 +157,7 @@ export default function AdminLessonPrompts() {
 
                     <div style={{ flex: 1 }}>
                         {selected ? (
-                            <div style={{ padding: '0.5rem', border: '1px solid #444', borderRadius: '4px' }}>
+                            <div style={{ padding: '0.5rem', border: '1px solid #444', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                                 <h4>
                                     Lesson {selected.lesson_session_id} —{' '}
                                     {selected.student_name || selected.user_email || 'Unknown'}
@@ -137,6 +183,35 @@ export default function AdminLessonPrompts() {
                                         style={{ width: '100%', height: '120px', background: '#111', color: '#eee', fontSize: '0.8rem' }}
                                         value={selected.greeting_event_prompt || ''}
                                     />
+                                </div>
+
+                                <div style={{ marginTop: '0.5rem' }}>
+                                    <h5>OpenAI Traffic Log (debug)</h5>
+                                    {trafficLoading && <p style={{ color: '#aaa' }}>Loading traffic log...</p>}
+                                    {trafficError && <p style={{ color: 'salmon' }}>Error: {trafficError}</p>}
+                                    {!trafficLoading && !trafficError && traffic.length === 0 && (
+                                        <p style={{ color: '#888', fontSize: '0.85rem' }}>
+                                            No traffic log entries found for this lesson (maybe debug logging was disabled).
+                                        </p>
+                                    )}
+                                    {traffic.length > 0 && (
+                                        <pre
+                                            style={{
+                                                width: '100%',
+                                                maxHeight: '260px',
+                                                overflowY: 'auto',
+                                                background: '#111',
+                                                color: '#eee',
+                                                fontSize: '0.78rem',
+                                                padding: '0.5rem',
+                                                borderRadius: '4px',
+                                            }}
+                                        >
+{traffic.map((t, idx) => (
+`[${t.ts || ''}][${t.direction}][${t.channel}]\n${prettyJson(t.payload)}${idx < traffic.length - 1 ? '\n\n' : ''}`
+)).join('')}
+                                        </pre>
+                                    )}
                                 </div>
                             </div>
                         ) : (
