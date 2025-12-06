@@ -167,7 +167,16 @@ export default function TokensPanel() {
 
                                         <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px', fontSize: '13px' }}>
                                             <div style={{ color: '#9ca3af' }}>API Key:</div>
-                                            <div style={{ fontFamily: 'monospace', color: data.has_key ? '#d1d5db' : '#6b7280' }}>
+                                            <div
+                                                style={{
+                                                    fontFamily: 'monospace',
+                                                    color: data.has_key ? '#d1d5db' : '#6b7280',
+                                                    maxWidth: '260px',
+                                                    overflow: 'hidden',
+                                                    textOverflow: 'ellipsis',
+                                                    whiteSpace: 'nowrap',
+                                                }}
+                                            >
                                                 {data.has_key ? data.masked_key : 'Not configured'}
                                             </div>
 

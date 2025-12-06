@@ -391,6 +391,14 @@ async def run_realtime_session(
         "created_at": datetime.utcnow().isoformat(),
     }
 
+    # Persist the initial snapshot immediately so Lesson Prompts always has at
+    # least the system prompt, even если greeting по какой-то причине не
+    # сработал.
+    try:
+        save_lesson_prompt_log(prompt_log_data)
+    except Exception as e:
+        logger.error(f"Failed to write initial prompt log for lesson {lesson_session.id}: {e}")
+
     # 1. Connect to OpenAI Realtime (latest model alias)
     url = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
     headers = {
@@ -1087,6 +1095,11 @@ async def run_legacy_session(
         "greeting_event_prompt": None,
         "created_at": datetime.utcnow().isoformat(),
     }
+
+    try:
+        save_lesson_prompt_log(prompt_log_data)
+    except Exception as e:
+        logger.error(f"Legacy: failed to write initial prompt log for lesson {lesson_session.id}: {e}")
 
     # State
     conversation_history = [

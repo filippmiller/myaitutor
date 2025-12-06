@@ -205,3 +205,100 @@
 ---
 
 Документ остаётся открытым для дальнейших дописок: любые новые улучшения Voice Rule Builder’а, пауз/резюме, debug logging’а и связанных багфиксов будут добавляться ниже как новые разделы с датой и кратким описанием изменений.
+
+## 2025-12-06 — Сессия 2: Beginner Rules UI, Analytics, Lesson Prompts, Voice Rule Builder STT
+
+### 1. Beginner Rules: удобный интерфейс вместо сырого JSON
+
+**Цель:** вместо редактирования огромного JSON-файла сделать человекочитаемый редактор плана Absolute Beginner.
+
+**Что изменили:**
+
+- В `frontend/src/components/AdminBeginnerRules.tsx` полностью переписан UI:
+  - Больше нет огромного `textarea` с JSON.
+  - Добавлены отдельные редакторы-списки для ключевых блоков:
+    - `goals` — цели курса.
+    - `teaching_principles` — принципы преподавания.
+    - `forbidden` — чего нельзя делать на уроке.
+    - `progression.after_5_lessons` — как меняется материал после первых 5 уроков.
+    - `core_categories` (произношения, базовые глаголы, приветствия, вопросы, полезные фразы).
+    - `lesson_structure` — редактируемый список шагов урока (step, name, description, example).
+    - `grammar_rules` — маленькие грамматические правила (rule + explanation).
+  - Везде поддерживается добавление/удаление элементов через `+ Добавить` / `Удалить`.
+- Данные по-прежнему сохраняются в `app/data/tutor_rules_beginner.json` через эндпоинт `GET/POST /api/admin/beginner-rules` (см. `app/api/admin.py`).
+- Для продвинутой отладки добавлен сворачиваемый блок **Raw JSON (read-only)**, который показывает текущий объект правил в виде JSON, но не требует редактировать его напрямую.
+
+**Важно:** при загрузке мы мержим данные из файла с дефолтной структурой (пустые массивы и словари), чтобы UI всегда имел валидные списки и не падал, даже если JSON в файле был частично пуст или изменён вручную.
+
+### 2. TokensPanel: компактное отображение API-ключей
+
+**Проблема:** в блоке *AI Provider Tokens* (`TokensPanel.tsx`) замаскированные API-ключи тянулись длинной строкой через всю карточку и визуально «упирались» в кнопку **Test Connection**.
+
+**Фикс:**
+
+- В `frontend/src/components/TokensPanel.tsx` ограничили ширину колонки с ключом и включили `ellipsis`:
+  - `maxWidth: '260px'`, `overflow: 'hidden'`, `textOverflow: 'ellipsis'`, `whiteSpace: 'nowrap'`.
+- Теперь при 2–6 провайдерах все карточки выглядят компактнее, ключ не вылезает за границы контейнера, а админ всё равно видит достаточный кусок маскированного ключа.
+
+### 3. Admin Analytics: добавлен эндпоинт для пауз уроков
+
+**Проблема:** фронтенд `AdminAnalytics.tsx` уже пытался грузить `/api/admin/analytics/lesson-pauses/recent`, но на бэкенде такого роута не было → в Railway-логах 404.
+
+**Решение:**
+
+- В `app/api/routes/admin_analytics.py` добавлены модели:
+  - `PauseEvent` (pause_id, lesson_session_id, paused_at, resumed_at, summary_text, student_id, student_email, pause_reason).
+  - `PauseResponse { days, limit, items }`.
+- Новый эндпоинт:
+  - `GET /api/admin/analytics/lesson-pauses/recent`
+  - Параметры: `days` (по умолчанию 7), `limit` (по умолчанию 50).
+  - Делает join `LessonPauseEvent` + `LessonSession` + `UserAccount`, чтобы вернуть e-mail студента и id урока.
+  - Сортирует по `paused_at DESC`, ограничивает `limit`.
+  - Возвращает `PauseResponse`, который напрямую мапится на `AdminAnalytics.tsx`.
+- Скомпилирован через `python -m py_compile` и `npm run build` — ошибок нет.
+
+Теперь раздел **Analytics** показывает не только деньги/минуты, но и табличку "Recent Lesson Pauses" с датой паузы, студентом, ID сессии, флагом, был ли урок возобновлён, и кратким резюме перед перерывом.
+
+### 4. Lesson Prompts: гарантированное сохранение system prompt
+
+**Проблема:** раньше лог `static/prompts/lesson_<id>_prompt.json` записывался только в момент события `lesson_started`, когда формировался greeting-event-пормпт. Если по какой-то причине greeting не триггерился (или что-то падало до этого момента), запись с system prompt вообще не создавалась → в админке **Lesson Prompts** было пусто.
+
+**Фикс:**
+
+- В `app/api/voice_ws.py` внутри `run_realtime_session` и `run_legacy_session`:
+  - После построения `system_prompt` и формирования `prompt_log_data` мы сразу вызываем `save_lesson_prompt_log(prompt_log_data)` в `try/except`.
+  - Позже, при обработке `system_event: lesson_started`, мы снова вызываем `save_lesson_prompt_log` уже с заполненным `greeting_event_prompt`, перезаписывая файл более полной версией.
+- Таким образом, теперь:
+  - Для любого запущенного голосового урока в `static/prompts` гарантированно появляется хотя бы system prompt.
+  - Страница **Lesson Prompts** в админке всегда имеет список последних уроков, даже если greeting не удалось сгенерировать.
+
+### 5. Voice Rule Builder: фикc пустого транскрипта после Stop
+
+**Симптом:**
+
+- В интерфейсе **Voice Rules** при нажатии *Start Recording* в блоке Transcript появлялись первые слова, но после остановки записи фронтенд показывал ошибку «Transcript is empty, nothing to generate», и правила не генерировались.
+- В Railway-логах при этом видно, что `/api/admin/voice-rules/transcribe-chunk` возвращает 200, а бэкенд мягко пропускает проблемные чанки (400 от Whisper).
+
+**Причина:**
+
+- Функция `generateRulesFromTranscript()` в `AdminVoiceRules.tsx` читала значение `transcript` из замыкания, привязанного к моменту старта записи.
+- Когда приходили чанки транскрипции и вызывался `setTranscript(...)`, компонент пере-рендеривался, но `mediaRecorder.onstop` всё равно ссылался на «старую» версию `generateRulesFromTranscript` с пустым `transcript`.
+- В итоге при `onstop` в боди на `/generate-from-text` улетала пустая строка, а фактический текст в UI появлялся уже ПОСЛЕ того, как бэкенд вернул 400 «Transcript is empty».
+
+**Решение:**
+
+- В `AdminVoiceRules.tsx` добавлен `const transcriptRef = useRef<string>('');`.
+- При каждом обновлении транскрипта:
+  - `setTranscript(prev => { const next = prev ? prev + ' ' + chunk : chunk; transcriptRef.current = next; return next; })`.
+- В `startRecording()` и `discardDraft()` мы сбрасываем и `transcript`, и `transcriptRef.current` в пустую строку.
+- `generateRulesFromTranscript()` теперь читает **текущее** значение только из `transcriptRef.current.trim()` и отправляет его в тело запроса на `/api/admin/voice-rules/generate-from-text`.
+- Если бэкенд нормализует текст и возвращает `data.transcript`, мы обновляем и `transcriptRef.current`, и состояние `transcript`.
+
+**Результат:**
+
+- Даже если какие-то чанки STT будут отбракованы (soft-fail в `transcribe_chunk`), финальный вызов `generate-from-text` всегда получит хотя бы тот текст, который реально появился в панели Transcript.
+- Ошибка «Transcript is empty, nothing to generate» теперь появляется только если распознать не удалось вообще ничего.
+
+---
+
+Дальше по мере доработок (например, если будем менять формат пауз, улучшать аналитику или адаптировать Beginner Rules под другие уровни) сюда можно дописывать новые разделы с датой и кратким описанием изменений.

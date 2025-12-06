@@ -46,6 +46,7 @@ export default function AdminVoiceRules() {
     const [error, setError] = useState<string | null>(null);
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const transcriptRef = useRef<string>('');
 
     const checkHealth = async (): Promise<boolean> => {
         setStatus('Checking backend health...');
@@ -75,6 +76,7 @@ export default function AdminVoiceRules() {
         setError(null);
         setSaveMessage(null);
         setTranscript('');
+        transcriptRef.current = '';
         setRules([]);
         setGenerationLogId(undefined);
 
@@ -137,7 +139,11 @@ export default function AdminVoiceRules() {
 
             const data: ChunkTranscriptionResponse = await res.json();
             if (data.text) {
-                setTranscript((prev) => (prev ? `${prev} ${data.text}` : data.text));
+                setTranscript((prev) => {
+                    const next = prev ? `${prev} ${data.text}` : data.text;
+                    transcriptRef.current = next;
+                    return next;
+                });
             }
         } catch (e: any) {
             console.error(e);
@@ -147,7 +153,8 @@ export default function AdminVoiceRules() {
     };
 
     const generateRulesFromTranscript = async () => {
-        if (!transcript.trim()) {
+        const finalTranscript = transcriptRef.current.trim();
+        if (!finalTranscript) {
             setStatus('Idle');
             setError('Transcript is empty, nothing to generate.');
             return;
@@ -155,7 +162,7 @@ export default function AdminVoiceRules() {
 
         setStatus('Generating rules from transcript...');
         try {
-            const body = { transcript };
+            const body = { transcript: finalTranscript };
 
             const res = await fetch('/api/admin/voice-rules/generate-from-text', {
                 method: 'POST',
@@ -172,6 +179,7 @@ export default function AdminVoiceRules() {
             // Keep transcript as we already built it live, but if backend normalized it,
             // we can prefer the backend version.
             if (data.transcript) {
+                transcriptRef.current = data.transcript;
                 setTranscript(data.transcript);
             }
 
@@ -198,6 +206,7 @@ export default function AdminVoiceRules() {
 
     const discardDraft = () => {
         setTranscript('');
+        transcriptRef.current = '';
         setRules([]);
         setGenerationLogId(undefined);
         setSaveMessage(null);
