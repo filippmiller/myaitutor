@@ -54,16 +54,48 @@ class OpenAIVoiceEngine:
             raise e
 
     async def transcribe(self, audio_bytes: bytes, filename: str = "audio.webm") -> str:
-        """Transcribe a short audio clip using OpenAI Whisper.
+        """Transcribe audio using OpenAI Whisper.
 
-        The filename/extension is important because OpenAI uses it to infer the
-        container/codec. Different browsers may send audio as webm/ogg/mp4, so
-        callers should pass an appropriate filename.
+        Even though Whisper supports many containers (webm/ogg/mp3/mp4/wav...),
+        in practice short admin recordings and chunks from MediaRecorder can be
+        rejected as "Invalid file format". To make this robust, we normalize all
+        incoming bytes to a simple mono PCM WAV stream via ffmpeg before
+        sending to OpenAI.
         """
         import io
-        audio_file = io.BytesIO(audio_bytes)
-        audio_file.name = filename
-        
+        import shutil
+        import subprocess
+
+        wav_bytes = audio_bytes
+        ffmpeg_path = shutil.which("ffmpeg")
+        if ffmpeg_path:
+            try:
+                # Convert whatever we have (webm/ogg/mp4/...) into 16kHz mono WAV
+                process = subprocess.Popen(
+                    [
+                        ffmpeg_path,
+                        "-i", "pipe:0",
+                        "-f", "wav",
+                        "-acodec", "pcm_s16le",
+                        "-ar", "16000",
+                        "-ac", "1",
+                        "pipe:1",
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                out, _ = process.communicate(input=audio_bytes)
+                if out:
+                    wav_bytes = out
+            except Exception as conv_err:
+                print(f"OpenAI STT ffmpeg convert error, falling back to raw bytes: {conv_err}")
+                wav_bytes = audio_bytes
+
+        audio_file = io.BytesIO(wav_bytes)
+        # Force a simple, supported extension
+        audio_file.name = "audio.wav"
+
         try:
             transcription = self.client.audio.transcriptions.create(
                 model=self.stt_model,
