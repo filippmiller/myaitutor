@@ -27,6 +27,14 @@ interface SaveResponse {
     }[];
 }
 
+interface HealthResponse {
+    openai_key_set: boolean;
+}
+
+interface ChunkTranscriptionResponse {
+    text: string;
+}
+
 export default function AdminVoiceRules() {
     const [isRecording, setIsRecording] = useState(false);
     const [status, setStatus] = useState<string>('Idle');
@@ -38,7 +46,29 @@ export default function AdminVoiceRules() {
     const [error, setError] = useState<string | null>(null);
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-    const chunksRef = useRef<Blob[]>([]);
+
+    const checkHealth = async (): Promise<boolean> => {
+        setStatus('Checking backend health...');
+        try {
+            const res = await fetch('/api/admin/voice-rules/health');
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || res.statusText);
+            }
+            const data: HealthResponse = await res.json();
+            if (!data.openai_key_set) {
+                setError('OpenAI API key not configured in admin settings. Зайди в админку и укажи ключ.');
+                setStatus('Error');
+                return false;
+            }
+            return true;
+        } catch (e: any) {
+            console.error(e);
+            setError(`Failed to contact backend (/health): ${String(e)}`);
+            setStatus('Error');
+            return false;
+        }
+    };
 
     const startRecording = async () => {
         if (isRecording) return;
@@ -48,26 +78,32 @@ export default function AdminVoiceRules() {
         setRules([]);
         setGenerationLogId(undefined);
 
+        const ok = await checkHealth();
+        if (!ok) {
+            return;
+        }
+
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
             mediaRecorderRef.current = mediaRecorder;
-            chunksRef.current = [];
 
             mediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0) {
-                    chunksRef.current.push(e.data);
+                    // Send chunk for near-realtime transcription
+                    sendChunkForTranscription(e.data);
                 }
             };
 
             mediaRecorder.onstop = () => {
                 // Stop all tracks
                 mediaRecorder.stream.getTracks().forEach((t) => t.stop());
-                const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-                sendAudioForDraft(blob);
+                setStatus('Generating rules from transcript...');
+                void generateRulesFromTranscript();
             };
 
-            mediaRecorder.start();
+            // small timeslice so we get chunks during recording
+            mediaRecorder.start(2000);
             setIsRecording(true);
             setStatus('Recording...');
         } catch (e: any) {
@@ -80,17 +116,16 @@ export default function AdminVoiceRules() {
     const stopRecording = () => {
         if (!isRecording || !mediaRecorderRef.current) return;
         setIsRecording(false);
-        setStatus('Processing audio...');
+        setStatus('Finishing recording...');
         mediaRecorderRef.current.stop();
     };
 
-    const sendAudioForDraft = async (blob: Blob) => {
-        setStatus('Uploading and generating rules...');
+    const sendChunkForTranscription = async (chunk: Blob) => {
         try {
             const form = new FormData();
-            form.append('audio_file', blob, 'voice-rules.webm');
+            form.append('audio_file', chunk, 'chunk.webm');
 
-            const res = await fetch('/api/admin/voice-rules/transcribe-and-draft', {
+            const res = await fetch('/api/admin/voice-rules/transcribe-chunk', {
                 method: 'POST',
                 body: form,
             });
@@ -100,12 +135,49 @@ export default function AdminVoiceRules() {
                 throw new Error(err.detail || res.statusText);
             }
 
+            const data: ChunkTranscriptionResponse = await res.json();
+            if (data.text) {
+                setTranscript((prev) => (prev ? `${prev} ${data.text}` : data.text));
+            }
+        } catch (e: any) {
+            console.error(e);
+            setError(`Live transcription failed: ${String(e)}`);
+            setStatus('Error');
+        }
+    };
+
+    const generateRulesFromTranscript = async () => {
+        if (!transcript.trim()) {
+            setStatus('Idle');
+            setError('Transcript is empty, nothing to generate.');
+            return;
+        }
+
+        setStatus('Generating rules from transcript...');
+        try {
+            const body = { transcript };
+
+            const res = await fetch('/api/admin/voice-rules/generate-from-text', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || res.statusText);
+            }
+
             const data: DraftResponse = await res.json();
-            setTranscript(data.transcript);
+            // Keep transcript as we already built it live, but if backend normalized it,
+            // we can prefer the backend version.
+            if (data.transcript) {
+                setTranscript(data.transcript);
+            }
 
             const draftRules: RuleDraft[] = (data.rules || []).map((r) => ({
                 ...r,
-                priority: r.priority ?? 0,
+                priority: (r as any).priority ?? 0,
                 selected: true,
             }));
             setRules(draftRules);
@@ -259,7 +331,7 @@ export default function AdminVoiceRules() {
                         </pre>
                     ) : (
                         <p style={{ color: '#666', fontSize: '0.9rem' }}>
-                            Здесь появится текст твоего голосового описания после остановки записи.
+                            Здесь в реальном времени будет появляться текст твоего голосового описания во время записи.
                         </p>
                     )}
                 </div>

@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional, Any
 import json
-from datetime import datetime
 
 from sqlmodel import Session
 
@@ -36,38 +35,32 @@ class SaveVoiceRulesRequest(BaseModel):
     generation_log_id: Optional[int] = None
 
 
-@router.post("/transcribe-and-draft", response_model=VoiceRulesDraftResponse)
-async def transcribe_and_draft_rules(
-    audio_file: UploadFile = File(...),
-    current_user: UserAccount = Depends(get_current_user),
-    session: Session = Depends(get_session),
-):
-    """Admin-only endpoint to turn a spoken description into draft tutor rules.
+class ChunkTranscriptionResponse(BaseModel):
+    text: str
 
-    1. Transcribes the uploaded audio using OpenAI Whisper.
-    2. Sends the transcript to Chat Completion with a strict JSON schema.
-    3. Returns the transcript and the structured rule drafts (NOT yet saved).
-    """
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Not authorized")
 
+class GenerateFromTextRequest(BaseModel):
+    transcript: str
+
+
+class HealthResponse(BaseModel):
+    openai_key_set: bool
+
+
+def _get_settings_or_400(session: Session) -> AppSettings:
     settings = session.get(AppSettings, 1)
     if not settings or not settings.openai_api_key:
         raise HTTPException(status_code=400, detail="OpenAI API key not configured in admin settings")
+    return settings
 
-    # Read audio bytes
-    audio_bytes = await audio_file.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="Empty audio file")
 
-    # 1. STT via existing OpenAIVoiceEngine helper
-    try:
-        stt_engine = OpenAIVoiceEngine(api_key=settings.openai_api_key)
-        transcript = await stt_engine.transcribe(audio_bytes)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"STT failed: {e}")
-
-    # 2. Use Chat Completion to turn transcript into structured rule drafts
+def _generate_rule_drafts_from_transcript(
+    transcript: str,
+    current_user: UserAccount,
+    session: Session,
+    settings: AppSettings,
+) -> VoiceRulesDraftResponse:
+    """Internal helper: call Chat Completion and return draft rules + log id."""
     from openai import OpenAI
 
     client = OpenAI(api_key=settings.openai_api_key)
@@ -153,6 +146,108 @@ async def transcribe_and_draft_rules(
         transcript=transcript,
         rules=drafts,
         generation_log_id=log.id,
+    )
+
+
+@router.get("/health", response_model=HealthResponse)
+def voice_rules_health(
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Quick health check so frontend can fail fast before recording."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    settings = session.get(AppSettings, 1)
+    return HealthResponse(openai_key_set=bool(settings and settings.openai_api_key))
+
+
+@router.post("/transcribe-and-draft", response_model=VoiceRulesDraftResponse)
+async def transcribe_and_draft_rules(
+    audio_file: UploadFile = File(...),
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Admin-only endpoint to turn a spoken description into draft tutor rules.
+
+    1. Transcribes the uploaded audio using OpenAI Whisper.
+    2. Sends the transcript to Chat Completion with a strict JSON schema.
+    3. Returns the transcript and the structured rule drafts (NOT yet saved).
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    settings = _get_settings_or_400(session)
+
+    # Read audio bytes
+    audio_bytes = await audio_file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+
+    # 1. STT via existing OpenAIVoiceEngine helper
+    try:
+        stt_engine = OpenAIVoiceEngine(api_key=settings.openai_api_key)
+        transcript = await stt_engine.transcribe(audio_bytes)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"STT failed: {e}")
+
+    # 2. Use Chat Completion to turn transcript into structured rule drafts
+    return _generate_rule_drafts_from_transcript(
+        transcript=transcript,
+        current_user=current_user,
+        session=session,
+        settings=settings,
+    )
+
+
+@router.post("/transcribe-chunk", response_model=ChunkTranscriptionResponse)
+async def transcribe_chunk(
+    audio_file: UploadFile = File(...),
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Transcribe a short audio chunk for realtime-ish transcript preview in the UI."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    settings = _get_settings_or_400(session)
+
+    audio_bytes = await audio_file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+
+    try:
+        stt_engine = OpenAIVoiceEngine(api_key=settings.openai_api_key)
+        text = await stt_engine.transcribe(audio_bytes)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"STT failed: {e}")
+
+    return ChunkTranscriptionResponse(text=text)
+
+
+@router.post("/generate-from-text", response_model=VoiceRulesDraftResponse)
+async def generate_from_text(
+    data: GenerateFromTextRequest,
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Generate draft rules directly from a transcript string.
+
+    Used by the frontend when it has already built a transcript via streaming
+    chunk transcription and only needs rule generation once at the end.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    if not data.transcript.strip():
+        raise HTTPException(status_code=400, detail="Transcript is empty")
+
+    settings = _get_settings_or_400(session)
+    return _generate_rule_drafts_from_transcript(
+        transcript=data.transcript,
+        current_user=current_user,
+        session=session,
+        settings=settings,
     )
 
 
