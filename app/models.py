@@ -222,18 +222,18 @@ class TutorRule(SQLModel, table=True):
     __tablename__ = "tutor_rules"
     id: Optional[int] = Field(default=None, primary_key=True)
     scope: str = Field(index=True)  # "global" | "app" | "student" | "session"
-    type: str  # "greeting" | "toxicity_warning" | "difficulty_adjustment" | "other"
+    type: str  # "greeting" | "toxicity_warning" | "difficulty_adjustment" | "language_mode" | "other"
     title: str
     description: str
-    trigger_condition: Optional[str] = None  # JSON string
-    action: Optional[str] = None  # JSON string
+    trigger_condition: Optional[str] = None  # JSON string (nested conditions allowed)
+    action: Optional[str] = None  # JSON string (what tutor should do/say)
     priority: int = Field(default=0)
     is_active: bool = Field(default=True, index=True)
     applies_to_student_id: Optional[int] = Field(default=None, foreign_key="user_accounts.id", index=True)
     applies_to_app_version: Optional[str] = None
     created_by: str  # "ai_admin" | "human_admin"
     updated_by: str  # "ai_admin" | "human_admin"
-    source: str  # "ai_admin" | "manual"
+    source: str  # "ai_admin" | "manual" | "voice_admin"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -270,3 +270,18 @@ class AdminAIMessage(SQLModel, table=True):
     message_type: str = Field(default="text")  # "text" | "system" | "rule_change_summary"
     content: str  # Can be JSON for structured messages
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RuleGenerationLog(SQLModel, table=True):
+    """Audit log for voice-based tutor rule generation sessions.
+
+    Stores what the admin said (transcript), what OpenAI returned, and which
+    TutorRule IDs were ultimately saved from that generation run.
+    """
+    __tablename__ = "rule_generation_logs"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    admin_user_id: int = Field(foreign_key="user_accounts.id", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    input_transcript: str
+    raw_model_response: Optional[str] = None  # JSON from OpenAI with draft rules
+    saved_rule_ids_json: Optional[str] = None  # JSON list of TutorRule.id created from this run

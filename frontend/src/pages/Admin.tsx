@@ -8,6 +8,7 @@ import AIChatPanel from '../components/AIChatPanel';
 import AdminAIRules from '../components/AdminAIRules';
 import AdminBeginnerRules from '../components/AdminBeginnerRules';
 import AdminLessonPrompts from '../components/AdminLessonPrompts';
+import AdminVoiceRules from '../components/AdminVoiceRules';
 
 export default function Admin() {
     const [activeTab, setActiveTab] = useState('settings');
@@ -105,6 +106,12 @@ export default function Admin() {
                 >
                     Lesson Prompts
                 </button>
+                <button
+                    onClick={() => setActiveTab('voice-rules')}
+                    style={{ background: activeTab === 'voice-rules' ? '#444' : 'transparent', border: 'none', color: 'white', padding: '10px', whiteSpace: 'nowrap' }}
+                >
+                    Voice Rules
+                </button>
             </div>
 
             {activeTab === 'settings' && (
@@ -166,6 +173,7 @@ export default function Admin() {
             {activeTab === 'ai-rules' && <AdminAIRules />}
             {activeTab === 'beginner-rules' && <AdminBeginnerRules />}
             {activeTab === 'lesson-prompts' && <AdminLessonPrompts />}
+            {activeTab === 'voice-rules' && <AdminVoiceRules />}
 
             {/* Floating AI Button */}
             {

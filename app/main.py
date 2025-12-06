@@ -42,6 +42,9 @@ app.include_router(admin_analytics.router, prefix="/api/admin/analytics", tags=[
 from app.api.routes import admin_ai_routes
 app.include_router(admin_ai_routes.router, prefix="/api/admin/ai", tags=["admin_ai"])
 
+from app.api.routes import admin_voice_rules
+app.include_router(admin_voice_rules.router, prefix="/api/admin/voice-rules", tags=["admin_voice_rules"])
+
 from app.api.routes import lesson_routes
 app.include_router(lesson_routes.router, prefix="/api", tags=["lessons"])
 
