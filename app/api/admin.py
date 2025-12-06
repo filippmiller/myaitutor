@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from app.database import get_session
 from app.models import AppSettings, UserAccount, UserProfile, TutorSystemRule, DebugSettings
+from app.services.auth_service import get_current_user
+from pydantic import BaseModel
 import openai
 import requests
 
@@ -9,8 +11,6 @@ import os
 import json
 from datetime import datetime
 from glob import glob
-import os
-import json
 
 router = APIRouter()
 
@@ -47,14 +47,14 @@ def update_settings(data: SettingsUpdate, session: Session = Depends(get_session
     session.refresh(settings)
     return settings
 
-n@router.get("/debug-settings")
+@router.get("/debug-settings")
 def get_debug_settings(session: Session = Depends(get_session)):
     settings = session.get(DebugSettings, 1)
     if not settings:
         return {"voice_logging_enabled": False}
     return settings
 
-n@router.post("/debug-settings")
+@router.post("/debug-settings")
 def update_debug_settings(data: DebugSettingsUpdate, session: Session = Depends(get_session)):
     settings = session.get(DebugSettings, 1)
     if not settings:

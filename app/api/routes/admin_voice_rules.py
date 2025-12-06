@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional, Any
 import json
+import os
 
 from sqlmodel import Session
 
@@ -48,9 +49,31 @@ class HealthResponse(BaseModel):
 
 
 def _get_settings_or_400(session: Session) -> AppSettings:
+    """Return AppSettings ensuring openai_api_key is populated.
+
+    We allow the key to come either from the DB or from the OPENAI_API_KEY
+    environment variable (like the main voice lesson pipeline does).
+    """
     settings = session.get(AppSettings, 1)
-    if not settings or not settings.openai_api_key:
-        raise HTTPException(status_code=400, detail="OpenAI API key not configured in admin settings")
+
+    db_key = settings.openai_api_key if settings and settings.openai_api_key else None
+    env_key = os.getenv("OPENAI_API_KEY")
+
+    api_key = (db_key or env_key or "").strip().strip("'").strip('"')
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenAI API key not configured in admin settings or environment",
+        )
+
+    # Make sure the returned settings object has the key set, even if it
+    # originally came from the environment only. We DO NOT persist it; this is
+    # just for downstream helpers that expect settings.openai_api_key.
+    if not settings:
+        settings = AppSettings(id=1, openai_api_key=api_key)
+    else:
+        settings.openai_api_key = api_key
+
     return settings
 
 
@@ -158,8 +181,13 @@ def voice_rules_health(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    settings = session.get(AppSettings, 1)
-    return HealthResponse(openai_key_set=bool(settings and settings.openai_api_key))
+    try:
+        settings = _get_settings_or_400(session)
+        return HealthResponse(openai_key_set=bool(settings and settings.openai_api_key))
+    except HTTPException:
+        # Do not bubble up 400 here; just report that key is not set so the
+        # frontend can show a friendly error and avoid recording.
+        return HealthResponse(openai_key_set=False)
 
 
 @router.post("/transcribe-and-draft", response_model=VoiceRulesDraftResponse)
