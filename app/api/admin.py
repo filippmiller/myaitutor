@@ -1,9 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from app.database import get_session
-from app.models import AppSettings, UserAccount, UserProfile, TutorSystemRule
-from app.services.auth_service import get_current_user
-from pydantic import BaseModel
+from app.models import AppSettings, UserAccount, UserProfile, TutorSystemRule, DebugSettings
 import openai
 import requests
 
@@ -17,6 +15,11 @@ router = APIRouter()
 class SettingsUpdate(BaseModel):
     openai_api_key: str
     default_model: str
+
+
+class DebugSettingsUpdate(BaseModel):
+    voice_logging_enabled: bool
+
 
 @router.get("/settings")
 def get_settings(session: Session = Depends(get_session)):
@@ -37,6 +40,24 @@ def update_settings(data: SettingsUpdate, session: Session = Depends(get_session
     settings.openai_api_key = data.openai_api_key
     settings.default_model = data.default_model
     
+    session.add(settings)
+    session.commit()
+    session.refresh(settings)
+    return settings
+
+n@router.get("/debug-settings")
+def get_debug_settings(session: Session = Depends(get_session)):
+    settings = session.get(DebugSettings, 1)
+    if not settings:
+        return {"voice_logging_enabled": False}
+    return settings
+
+n@router.post("/debug-settings")
+def update_debug_settings(data: DebugSettingsUpdate, session: Session = Depends(get_session)):
+    settings = session.get(DebugSettings, 1)
+    if not settings:
+        settings = DebugSettings(id=1)
+    settings.voice_logging_enabled = data.voice_logging_enabled
     session.add(settings)
     session.commit()
     session.refresh(settings)

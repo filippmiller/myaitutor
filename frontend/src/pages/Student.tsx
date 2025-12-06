@@ -34,6 +34,9 @@ export default function Student() {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const lessonSessionIdRef = useRef<number | null>(null);
+
+    const [debugEnabled, setDebugEnabled] = useState(false);
+    const [debugLines, setDebugLines] = useState<string[]>([]);
     const chatEndRef = useRef<HTMLDivElement | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
 
@@ -94,6 +97,10 @@ export default function Student() {
     };
 
     const startLesson = async (isResume: boolean) => {
+        // Reset debug console for new connection (but keep on resume within same lesson)
+        if (!isResume) {
+            setDebugLines([]);
+        }
         console.log('🚀 [START LESSON] Initiating...');
         try {
             // 1. Get Microphone Access
@@ -170,6 +177,9 @@ export default function Student() {
                                 lessonSessionIdRef.current = msg.lesson_session_id;
                                 console.log('📚 [LESSON] lesson_session_id =', msg.lesson_session_id);
                             }
+                            if (typeof msg.debug_enabled === 'boolean') {
+                                setDebugEnabled(msg.debug_enabled);
+                            }
                         } else if (msg.type === 'transcript') {
                             console.log(`💬 [TRANSCRIPT] ${msg.role}: ${msg.text}`);
 
@@ -207,6 +217,10 @@ export default function Student() {
                                     console.log('📝 [PAUSE SUMMARY]', msg.resume_hint);
                                 }
                             }
+                        } else if (msg.type === 'debug') {
+                            // Low-level OpenAI traffic (only when admin enables debugging)
+                            const line = `[${msg.direction}][${msg.channel}] ${JSON.stringify(msg.payload)}`;
+                            setDebugLines(prev => [...prev, line]);
                         }
                     } catch (e) {
                         console.error('❌ [WEBSOCKET] Failed to parse message:', event.data);
@@ -494,6 +508,28 @@ export default function Student() {
                             <div ref={chatEndRef} />
                         </div>
                     </div>
+
+                    {debugEnabled && (
+                        <div className="card" style={{ marginTop: '1rem' }}>
+                            <h3>Debug Console (OpenAI traffic)</h3>
+                            <pre
+                                style={{
+                                    maxHeight: '250px',
+                                    overflowY: 'auto',
+                                    whiteSpace: 'pre-wrap',
+                                    wordBreak: 'break-word',
+                                    fontSize: '0.8rem',
+                                    background: '#111',
+                                    padding: '0.75rem',
+                                    borderRadius: '4px',
+                                }}
+                            >
+                                {debugLines.length === 0
+                                    ? 'Debug logging is enabled in Admin, but no packets have been logged yet.'
+                                    : debugLines.join('\n\n')}
+                            </pre>
+                        </div>
+                    )}
                 </>
             ) : (
                 <div className="card">

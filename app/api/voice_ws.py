@@ -14,9 +14,7 @@ from sqlmodel import Session, select
 import websockets
 
 from app.database import get_session
-from app.models import AppSettings, UserAccount, UserProfile, AuthSession, LessonSession, LessonTurn, LessonPauseEvent
-from app.services.yandex_service import YandexService, AudioConverter
-from app.services.voice_engine import get_voice_engine
+from app.models import AppSettings, UserAccount, UserProfile, AuthSession, LessonSession, LessonTurn, LessonPauseEvent, DebugSettings
 from app.services.tutor_service import build_tutor_system_prompt
 from app.services.language_utils import parse_language_mode_marker, strip_language_markers
 
@@ -87,6 +85,7 @@ async def voice_websocket(websocket: WebSocket):
     settings: Optional[AppSettings] = None
     lesson_session: Optional[LessonSession] = None
     is_resume: bool = False
+    debug_voice_logging: bool = False
     
     try:
         # 0. Authenticate User
@@ -114,6 +113,14 @@ async def voice_websocket(websocket: WebSocket):
             await websocket.send_json({"type": "system", "level": "error", "message": "OpenAI API Key missing."})
             await websocket.close(code=1011)
             return
+
+        # 1c. Load debug settings
+        try:
+            dbg = session.get(DebugSettings, 1)
+            debug_voice_logging = bool(dbg and dbg.voice_logging_enabled)
+        except Exception as e:
+            logger.error(f"Failed to load DebugSettings: {e}")
+            debug_voice_logging = False
 
         # 1b. Inspect query params for resume of an existing lesson session
         qs = websocket.query_params
@@ -175,6 +182,7 @@ async def voice_websocket(websocket: WebSocket):
                     user=user,
                     lesson_session=lesson_session,
                     is_resume=is_resume,
+                    debug_logging=debug_voice_logging,
                 )
                 return # If successful and finishes normally
             except Exception as e:
@@ -200,6 +208,7 @@ async def voice_websocket(websocket: WebSocket):
             user=user,
             lesson_session=lesson_session,
             is_resume=is_resume,
+            debug_logging=debug_voice_logging,
         )
 
     except WebSocketDisconnect:
@@ -220,6 +229,7 @@ async def run_realtime_session(
     user: UserAccount | None = None,
     lesson_session: LessonSession | None = None,
     is_resume: bool = False,
+    debug_logging: bool = False,
 ):
     """Manage a session with the latest OpenAI Realtime API (gpt-realtime).
 
@@ -234,6 +244,34 @@ async def run_realtime_session(
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
         raise RuntimeError("ffmpeg not found")
+
+    def _scrub_audio_fields(obj):
+        """Remove or shorten large base64/audio fields for debug logging."""
+        if isinstance(obj, dict):
+            new = {}
+            for k, v in obj.items():
+                if k in {"audio", "delta", "audio_base64"} and isinstance(v, str) and len(v) > 120:
+                    new[k] = f"[base64 audio, {len(v)} chars]"
+                else:
+                    new[k] = _scrub_audio_fields(v)
+            return new
+        if isinstance(obj, list):
+            return [_scrub_audio_fields(x) for x in obj]
+        return obj
+
+    async def _send_debug(direction: str, channel: str, payload: dict):
+        if not debug_logging:
+            return
+        try:
+            clean = _scrub_audio_fields(payload)
+            await websocket.send_json({
+                "type": "debug",
+                "direction": direction,
+                "channel": channel,
+                "payload": clean,
+            })
+        except Exception as e:
+            logger.error(f"Failed to send debug packet: {e}")
 
     # Ensure we have AppSettings for default model (used for summaries)
     settings: Optional[AppSettings] = session.get(AppSettings, 1)
@@ -296,6 +334,7 @@ async def run_realtime_session(
             {
                 "type": "lesson_info",
                 "lesson_session_id": lesson_session.id,
+                "debug_enabled": debug_logging,
             }
         )
     except Exception as e:
@@ -370,6 +409,7 @@ async def run_realtime_session(
         }
         await openai_ws.send(json.dumps(session_update))
         logger.info("Realtime: session.update sent to OpenAI with system prompt")
+        await _send_debug("to_openai", "realtime", session_update)
         
         # Wait a moment for OpenAI to process session.update
         await asyncio.sleep(0.5)
@@ -440,15 +480,18 @@ async def run_realtime_session(
                     "Dialogue so far:\n" + dialogue_text + "\n\n" +
                     "Write 1–2 short sentences (in English) that summarize what they have done so far."
                 )
+                messages = [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ]
+                await _send_debug("to_openai", "pause_summary", {"model": model_name, "messages": messages})
                 completion = await client.chat.completions.create(
                     model=model_name,
-                    messages=[
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": user_msg},
-                    ],
+                    messages=messages,
                     max_tokens=120,
                 )
                 summary = completion.choices[0].message.content or ""
+                await _send_debug("from_openai", "pause_summary", {"summary": summary})
                 return summary.strip()
             except Exception as e:
                 logger.error(f"Failed to generate pause summary: {e}", exc_info=True)
@@ -477,7 +520,7 @@ async def run_realtime_session(
                                 prompt_log_data["stt_language"] = stt_language
                                 logger.info(f"Realtime: Config received - STT Language: {stt_language}")
                                 # In Realtime mode, OpenAI handles STT internally, but we log it for reference
-                                # Could be used for future enhancements or logging
+                                await _send_debug("from_frontend", "config", data)
                             
                             elif data.get("type") == "system_event" and data.get("event") == "lesson_started":
                                 if greeting_triggered:
@@ -516,6 +559,7 @@ async def run_realtime_session(
                                         len(greeting_text),
                                     )
                                     await openai_ws.send(json.dumps(greeting_trigger))
+                                    await _send_debug("to_openai", "realtime_greeting", greeting_trigger)
                                     
                                     # Immediately request a response based on the updated conversation
                                     response_request = {
@@ -531,6 +575,7 @@ async def run_realtime_session(
                                     logger.info("Realtime: Requesting greeting response creation...")
                                     await openai_ws.send(json.dumps(response_request))
                                     logger.info("Realtime: Greeting response request sent")
+                                    await _send_debug("to_openai", "realtime_greeting", response_request)
                                 except Exception as greeting_error:
                                     logger.error(f"Realtime: Failed to trigger greeting: {greeting_error}", exc_info=True)
                                     await websocket.send_json({
@@ -631,6 +676,8 @@ async def run_realtime_session(
                 async for message in openai_ws:
                     event = json.loads(message)
                     event_type = event.get("type")
+                    
+                    await _send_debug("from_openai", "realtime", event)
                     
                     # Log ALL events for debugging
                     if event_type in ("response.audio.delta", "response.output_audio.delta"):
@@ -901,9 +948,37 @@ async def run_legacy_session(
     user: UserAccount | None = None,
     lesson_session: LessonSession | None = None,
     is_resume: bool = False,
+    debug_logging: bool = False,
 ):
     """Legacy implementation using VAD + Whisper + TTS (OpenAI/Yandex)."""
     # Initialize Services
+    def _scrub_audio_fields_legacy(obj):
+        if isinstance(obj, dict):
+            new = {}
+            for k, v in obj.items():
+                if k in {"audio", "delta", "audio_base64"} and isinstance(v, str) and len(v) > 120:
+                    new[k] = f"[base64 audio, {len(v)} chars]"
+                else:
+                    new[k] = _scrub_audio_fields_legacy(v)
+            return new
+        if isinstance(obj, list):
+            return [_scrub_audio_fields_legacy(x) for x in obj]
+        return obj
+
+    async def _send_debug(direction: str, channel: str, payload: dict):
+        if not debug_logging:
+            return
+        try:
+            clean = _scrub_audio_fields_legacy(payload)
+            await websocket.send_json({
+                "type": "debug",
+                "direction": direction,
+                "channel": channel,
+                "payload": clean,
+            })
+        except Exception as e:
+            logger.error(f"Legacy: failed to send debug packet: {e}")
+
     try:
         yandex_service = YandexService() # Still used for fallback TTS potentially
         converter = AudioConverter() # ffmpeg 48k

@@ -12,6 +12,18 @@ class AppSettings(SQLModel, table=True):
     # deepgram_api_key: Optional[str] = None
     # deepgram_voice_id: str = Field(default="aura-asteria-en")
 
+
+class DebugSettings(SQLModel, table=True):
+    """Misc debug/feature flags that can be toggled from the Admin UI.
+
+    Kept in a separate table so we can add flags without touching critical
+    tables like lesson_sessions or app_settings.
+    """
+    __tablename__ = "debug_settings"
+    id: int = Field(default=1, primary_key=True)
+    voice_logging_enabled: bool = Field(default=False)
+
+
 class LessonSession(SQLModel, table=True):
     __tablename__ = "lesson_sessions"
     id: Optional[int] = Field(default=None, primary_key=True)

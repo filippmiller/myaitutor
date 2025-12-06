@@ -16,6 +16,7 @@ export default function Admin() {
     const [model, setModel] = useState('gpt-4o-mini');
     const [msg, setMsg] = useState('');
     const [testResult, setTestResult] = useState('');
+    const [voiceDebug, setVoiceDebug] = useState(false);
     const [aiChatOpen, setAiChatOpen] = useState(false);
 
     useEffect(() => {
@@ -26,6 +27,18 @@ export default function Admin() {
                     if (data.openai_api_key) setApiKey(data.openai_api_key);
                     if (data.default_model) setModel(data.default_model);
                 });
+
+            // Load debug settings (voice logging)
+            fetch('/api/admin/debug-settings')
+                .then(res => res.json())
+                .then(data => {
+                    if (typeof data.voice_logging_enabled === 'boolean') {
+                        setVoiceDebug(data.voice_logging_enabled);
+                    }
+                })
+                .catch(() => {
+                    // optional endpoint; ignore errors
+                });
         }
     }, [activeTab]);
 
@@ -35,10 +48,25 @@ export default function Admin() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 openai_api_key: apiKey,
-                default_model: model
-            })
+                default_model: model,
+            }),
         });
-        if (res.ok) setMsg('Saved!');
+
+        let ok = res.ok;
+
+        // Save debug settings separately
+        try {
+            const dbgRes = await fetch('/api/admin/debug-settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ voice_logging_enabled: voiceDebug }),
+            });
+            ok = ok && dbgRes.ok;
+        } catch {
+            ok = false;
+        }
+
+        if (ok) setMsg('Saved!');
         else setMsg('Error saving');
     };
 
@@ -136,6 +164,15 @@ export default function Admin() {
                                 <option value="gpt-4-turbo">gpt-4-turbo</option>
                                 <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
                             </select>
+                        </label>
+                        <label style={{ display: 'block', marginBottom: '10px' }}>
+                            <input
+                                type="checkbox"
+                                checked={voiceDebug}
+                                onChange={e => setVoiceDebug(e.target.checked)}
+                                style={{ marginRight: '8px' }}
+                            />
+                            Enable voice debug logging (show OpenAI traffic in student UI)
                         </label>
                         <button onClick={testOpenAI} style={{ marginRight: '10px' }}>Test OpenAI</button>
                         <button onClick={async () => {
