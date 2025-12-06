@@ -276,10 +276,19 @@ async def transcribe_chunk(
         # or similar errors. For live transcription we don't want to break the
         # whole flow because of one bad chunk, so we log and return empty text.
         msg = str(e)
-        if "Invalid file format" in msg or "invalid file format" in msg:
-            # Swallow this as a soft failure.
+        if (
+            "Invalid file format" in msg
+            or "invalid file format" in msg
+            or "could not be decoded" in msg
+            or "format is not supported" in msg
+        ):
+            # Swallow this as a soft failure for live transcription. Some
+            # short/edge-case chunks are not decodable by Whisper; we just skip
+            # them instead of breaking the whole recording.
             from logging import getLogger
-            getLogger(__name__).warning(f"admin_voice_rules: skipping invalid STT chunk: {msg}")
+            getLogger(__name__).warning(
+                f"admin_voice_rules: skipping invalid/undecodable STT chunk: {msg}"
+            )
             return ChunkTranscriptionResponse(text="")
         raise HTTPException(status_code=500, detail=f"STT failed: {e}")
 
