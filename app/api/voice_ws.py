@@ -1468,3 +1468,265 @@ def add_wav_header(pcm_data, sample_rate=48000, channels=1, sampwidth=2):
 @router.get("/health")
 def health_check():
     return {"status": "ok", "provider": "openai-realtime"}
+
+
+# ========================= Admin AI Realtime Assistant =========================
+
+@router.websocket("/ws/admin-ai")
+async def admin_ai_websocket(websocket: WebSocket):
+    """Realtime voice channel for the Admin AI Assistant.
+
+    This reuses the same cookies-based auth as the student voice WS, but only
+    allows admins. Audio is sent from the browser as WebM, converted to PCM via
+    ffmpeg (AudioConverter), chunked with simple VAD, transcribed with
+    whisper-1 and then passed into the existing Admin AI pipeline
+    (process_admin_message). Responses are played back with tts-1.
+    """
+    await websocket.accept()
+    logger.info("Admin AI WebSocket connection accepted")
+
+    from app.database import engine
+    session = Session(engine)
+
+    user: Optional[UserAccount] = None
+
+    try:
+        # 0. Authenticate via session cookie
+        session_id = websocket.cookies.get("session_id")
+        if session_id:
+            auth_session = session.get(AuthSession, session_id)
+            from datetime import datetime
+            if auth_session and not auth_session.is_revoked and auth_session.expires_at > datetime.utcnow():
+                user = session.get(UserAccount, auth_session.user_id)
+
+        if not user or user.role != "admin":
+            await websocket.send_json({
+                "type": "system",
+                "level": "error",
+                "message": "Admin authentication required",
+            })
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+            return
+
+        # 1. Load OpenAI settings
+        settings = session.get(AppSettings, 1)
+        api_key = settings.openai_api_key if settings and settings.openai_api_key else os.getenv("OPENAI_API_KEY")
+        if api_key:
+            api_key = api_key.strip().strip("'").strip('"')
+        if not api_key:
+            await websocket.send_json({
+                "type": "system",
+                "level": "error",
+                "message": "OpenAI API key missing.",
+            })
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+            return
+
+        await run_admin_assistant_session(websocket, api_key, user, session)
+
+    except WebSocketDisconnect:
+        logger.info("Admin AI WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"Admin AI main loop error: {e}", exc_info=True)
+        try:
+            await websocket.send_json({
+                "type": "system",
+                "level": "error",
+                "message": f"Admin AI error: {e}",
+            })
+        except Exception:
+            pass
+    finally:
+        session.close()
+        logger.info("Admin AI cleanup complete")
+
+
+async def run_admin_assistant_session(
+    websocket: WebSocket,
+    api_key: str,
+    user: UserAccount,
+    session: Session,
+):
+    """Realtime admin assistant using Whisper + Admin AI tools + TTS.
+
+    Audio flow:
+    - Browser sends WebM chunks.
+    - AudioConverter (ffmpeg) converts to PCM 48k mono.
+    - Simple RMS-based VAD cuts utterances.
+    - Each utterance -> whisper-1 -> text.
+    - Text -> process_admin_message -> AI response + actions_taken.
+    - AI response -> tts-1 via existing get_voice_engine("openai").
+    - Text + actions are streamed back to the UI as JSON + audio.
+    """
+    from app.services.yandex_service import AudioConverter
+    from app.services.voice_engine import get_voice_engine
+    from app.services.admin_ai_service import process_admin_message
+    from openai import AsyncOpenAI
+    import audioop
+    from io import BytesIO
+
+    logger.info("Starting Admin Assistant realtime session")
+
+    try:
+        converter = AudioConverter()
+        tts_engine = get_voice_engine("openai", api_key=api_key)
+    except Exception as e:
+        logger.error(f"Admin AI init failed: {e}")
+        await websocket.send_json({
+            "type": "system",
+            "level": "error",
+            "message": f"Failed to init audio stack: {e}",
+        })
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        return
+
+    admin_conversation_id: Optional[int] = None
+    audio_buffer = bytearray()
+    is_speaking = False
+    silence_start_time = 0.0
+    SILENCE_THRESHOLD = 500
+    SILENCE_DURATION = 1.0
+    MIN_AUDIO_LENGTH = 0.5  # seconds
+
+    loop = asyncio.get_running_loop()
+    stt_client = AsyncOpenAI(api_key=api_key)
+
+    async def synthesize_and_send(text: str):
+        try:
+            async for chunk in tts_engine.synthesize_stream(text, voice_id="alloy"):
+                if chunk:
+                    await websocket.send_bytes(chunk)
+        except Exception as e:
+            logger.error(f"Admin AI TTS error: {e}")
+
+    async def handle_admin_turn(text: str):
+        nonlocal admin_conversation_id
+
+        # Show final user text in UI
+        await websocket.send_json({
+            "type": "admin_transcript",
+            "role": "human",
+            "text": text,
+        })
+
+        def _call_process():
+            return process_admin_message(
+                admin_user_id=user.id,
+                message_text=text,
+                session=session,
+                conversation_id=admin_conversation_id,
+            )
+
+        try:
+            result = await loop.run_in_executor(None, _call_process)
+        except Exception as e:
+            logger.error(f"Admin AI process_admin_message error: {e}", exc_info=True)
+            await websocket.send_json({
+                "type": "system",
+                "level": "error",
+                "message": f"Admin AI error: {e}",
+            })
+            return
+
+        admin_conversation_id = result.get("conversation_id", admin_conversation_id)
+
+        if "error" in result:
+            ai_text = f"Error: {result['error']}"
+            actions = []
+        else:
+            ai_text = result.get("ai_response") or ""
+            actions = result.get("actions_taken") or []
+
+        if ai_text:
+            await websocket.send_json({
+                "type": "admin_transcript",
+                "role": "ai",
+                "text": ai_text,
+                "actions_taken": actions,
+            })
+            await synthesize_and_send(ai_text)
+
+    async def receive_loop():
+        try:
+            while True:
+                message = await websocket.receive()
+                if "bytes" in message:
+                    data = message["bytes"]
+                    await loop.run_in_executor(None, converter.write, data)
+                elif "text" in message:
+                    # Reserved for future control messages (e.g. reset, stop)
+                    logger.info(f"Admin AI WS text message: {message['text']}")
+        except WebSocketDisconnect:
+            logger.info("Admin AI receive_loop: client disconnected")
+        finally:
+            converter.close_stdin()
+
+    async def stt_loop():
+        nonlocal audio_buffer, is_speaking, silence_start_time
+        while True:
+            chunk = await loop.run_in_executor(None, converter.read, 4000)
+            if not chunk:
+                if converter.process.poll() is not None:
+                    break
+                await asyncio.sleep(0.01)
+                continue
+
+            try:
+                rms = audioop.rms(chunk, 2)
+            except Exception:
+                rms = 0
+
+            if rms > SILENCE_THRESHOLD:
+                if not is_speaking:
+                    is_speaking = True
+                silence_start_time = 0
+                audio_buffer.extend(chunk)
+            else:
+                if is_speaking:
+                    if silence_start_time == 0:
+                        silence_start_time = time.time()
+                    audio_buffer.extend(chunk)
+
+                    if time.time() - silence_start_time > SILENCE_DURATION:
+                        if len(audio_buffer) > 48000 * 2 * MIN_AUDIO_LENGTH:
+                            pcm_bytes = bytes(audio_buffer)
+                            audio_buffer = bytearray()
+                            is_speaking = False
+                            silence_start_time = 0
+
+                            wav_bytes = add_wav_header(pcm_bytes, sample_rate=48000)
+                            buf = BytesIO(wav_bytes)
+                            buf.name = "admin.wav"
+
+                            try:
+                                transcription = await stt_client.audio.transcriptions.create(
+                                    model="whisper-1",
+                                    file=buf,
+                                )
+                                text = (transcription.text or "").strip()
+                                if text:
+                                    await handle_admin_turn(text)
+                            except Exception as e:
+                                logger.error(f"Admin AI whisper error: {e}", exc_info=True)
+                                try:
+                                    await websocket.send_json({
+                                        "type": "system",
+                                        "level": "error",
+                                        "message": f"STT error: {e}",
+                                    })
+                                except Exception:
+                                    pass
+                        else:
+                            # Too short utterance; just drop it.
+                            audio_buffer = bytearray()
+                            is_speaking = False
+                            silence_start_time = 0
+
+    try:
+        await asyncio.gather(
+            asyncio.create_task(receive_loop()),
+            asyncio.create_task(stt_loop()),
+        )
+    finally:
+        converter.close()
+        logger.info("Admin AI session finished")
