@@ -1,8 +1,7 @@
 import json
 from typing import Optional
 from sqlmodel import Session, select
-from app.models import UserProfile, UserState, TutorSystemRule, SessionSummary, TutorRule, LessonSession
-from app.security import ADMIN_EMAIL
+from app.models import UserProfile, UserState, TutorSystemRule, SessionSummary, TutorRule, LessonSession, LessonPauseEvent
 
 def get_tutor_memory_for_user(session: Session, user_id: int) -> dict:
     # Get UserState
@@ -85,8 +84,17 @@ def build_tutor_system_prompt(
         if lesson:
             language_mode = lesson.language_mode
             language_level = lesson.language_level
-            pause_count = lesson.pause_count or 0
-            last_pause_summary = lesson.last_pause_summary
+
+            # Pause metadata is stored in LessonPauseEvent to avoid altering the existing lesson_sessions schema.
+            pause_events = session.exec(
+                select(LessonPauseEvent)
+                .where(LessonPauseEvent.lesson_session_id == lesson_session_id)
+                .order_by(LessonPauseEvent.paused_at)
+            ).all()
+            pause_count = len(pause_events)
+            if pause_events:
+                last_event = pause_events[-1]
+                last_pause_summary = last_event.summary_text
     
     # 4. Fetch User Preferences
     prefs = json.loads(user.preferences)

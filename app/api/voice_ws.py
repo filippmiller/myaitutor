@@ -253,7 +253,6 @@ async def run_realtime_session(
     else:
         # Mark resumed
         lesson_session.status = "active"
-        lesson_session.last_resumed_at = datetime.utcnow()
         session.add(lesson_session)
         # Close the latest open LessonPauseEvent for this session, if any
         try:
@@ -264,7 +263,9 @@ async def run_realtime_session(
                 .order_by(LessonPauseEvent.paused_at.desc())
             ).first()
             if last_pause:
-                last_pause.resumed_at = lesson_session.last_resumed_at
+                # We do not store last_resumed_at on LessonSession to avoid schema changes;
+                # use the pause event for analytics instead.
+                last_pause.resumed_at = datetime.utcnow()
                 session.add(last_pause)
         except Exception as e:
             logger.error(f"Failed to mark LessonPauseEvent as resumed: {e}")
@@ -546,12 +547,8 @@ async def run_realtime_session(
                                     summary = await _generate_pause_summary()
                                     now = _dt.utcnow()
 
-                                    # Update LessonSession
+                                    # Update LessonSession status only (no new columns)
                                     lesson_session.status = "paused"
-                                    lesson_session.pause_count = (lesson_session.pause_count or 0) + 1
-                                    lesson_session.last_paused_at = now
-                                    if summary:
-                                        lesson_session.last_pause_summary = summary
                                     session.add(lesson_session)
 
                                     # Create LessonPauseEvent
@@ -931,7 +928,6 @@ async def run_legacy_session(
         logger.info(f"Created LessonSession {lesson_session.id}")
     else:
         lesson_session.status = "active"
-        lesson_session.last_resumed_at = datetime.utcnow()
         session.add(lesson_session)
         # Close last open LessonPauseEvent if any
         try:
@@ -942,7 +938,7 @@ async def run_legacy_session(
                 .order_by(LessonPauseEvent.paused_at.desc())
             ).first()
             if last_pause:
-                last_pause.resumed_at = lesson_session.last_resumed_at
+                last_pause.resumed_at = datetime.utcnow()
                 session.add(last_pause)
         except Exception as e:
             logger.error(f"Legacy: Failed to mark LessonPauseEvent as resumed: {e}")
@@ -1227,11 +1223,8 @@ async def run_legacy_session(
                                 summary = await _generate_pause_summary_legacy()
                                 now = _dt.utcnow()
 
+                                # Only update status; pause metadata lives in LessonPauseEvent
                                 lesson_session.status = "paused"
-                                lesson_session.pause_count = (lesson_session.pause_count or 0) + 1
-                                lesson_session.last_paused_at = now
-                                if summary:
-                                    lesson_session.last_pause_summary = summary
                                 session.add(lesson_session)
 
                                 pause_event = LessonPauseEvent(

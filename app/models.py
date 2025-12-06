@@ -19,14 +19,8 @@ class LessonSession(SQLModel, table=True):
     started_at: datetime = Field(default_factory=datetime.utcnow)
     ended_at: Optional[datetime] = None
     duration_seconds: Optional[int] = None
-    # active, paused, completed, error
+    # Status of the logical lesson: active, paused, completed, error
     status: str = Field(default="active")
-
-    # Pause/Resume metadata for a single logical lesson that can be paused multiple times
-    pause_count: int = Field(default=0)
-    last_pause_summary: Optional[str] = None  # Short summary of what was covered before the last pause
-    last_paused_at: Optional[datetime] = None
-    last_resumed_at: Optional[datetime] = None
     
     # Language Mode Selection (for session-specific language preferences)
     language_mode: Optional[str] = Field(default=None)  # EN_ONLY, RU_ONLY, MIXED
