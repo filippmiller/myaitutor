@@ -53,16 +53,21 @@ class OpenAIVoiceEngine:
             print(f"OpenAI TTS Stream Error: {e}")
             raise e
 
-    async def transcribe(self, audio_bytes: bytes) -> str:
-        # OpenAI requires a file-like object with a name
+    async def transcribe(self, audio_bytes: bytes, filename: str = "audio.webm") -> str:
+        """Transcribe a short audio clip using OpenAI Whisper.
+
+        The filename/extension is important because OpenAI uses it to infer the
+        container/codec. Different browsers may send audio as webm/ogg/mp4, so
+        callers should pass an appropriate filename.
+        """
         import io
         audio_file = io.BytesIO(audio_bytes)
-        audio_file.name = "audio.webm" # Assume webm from frontend
+        audio_file.name = filename
         
         try:
             transcription = self.client.audio.transcriptions.create(
                 model=self.stt_model,
-                file=audio_file
+                file=audio_file,
             )
             return transcription.text
         except Exception as e:

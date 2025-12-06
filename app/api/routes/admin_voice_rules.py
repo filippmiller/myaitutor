@@ -215,7 +215,20 @@ async def transcribe_and_draft_rules(
     # 1. STT via existing OpenAIVoiceEngine helper
     try:
         stt_engine = OpenAIVoiceEngine(api_key=settings.openai_api_key)
-        transcript = await stt_engine.transcribe(audio_bytes)
+        # Infer extension from content_type when possible so OpenAI knows
+        # whether this is webm/ogg/mp4/etc.
+        content_type = audio_file.content_type or "audio/webm"
+        ext = "webm"
+        if "ogg" in content_type:
+            ext = "ogg"
+        elif "wav" in content_type:
+            ext = "wav"
+        elif "mp4" in content_type or "mpeg" in content_type:
+            ext = "mp4"
+        elif "mp3" in content_type or "mpga" in content_type:
+            ext = "mp3"
+        filename = f"admin-voice.{ext}"
+        transcript = await stt_engine.transcribe(audio_bytes, filename=filename)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"STT failed: {e}")
 
@@ -246,8 +259,28 @@ async def transcribe_chunk(
 
     try:
         stt_engine = OpenAIVoiceEngine(api_key=settings.openai_api_key)
-        text = await stt_engine.transcribe(audio_bytes)
+        content_type = audio_file.content_type or "audio/webm"
+        ext = "webm"
+        if "ogg" in content_type:
+            ext = "ogg"
+        elif "wav" in content_type:
+            ext = "wav"
+        elif "mp4" in content_type or "mpeg" in content_type:
+            ext = "mp4"
+        elif "mp3" in content_type or "mpga" in content_type:
+            ext = "mp3"
+        filename = f"admin-voice-chunk.{ext}"
+        text = await stt_engine.transcribe(audio_bytes, filename=filename)
     except Exception as e:
+        # OpenAI sometimes rejects very short chunks with "Invalid file format"
+        # or similar errors. For live transcription we don't want to break the
+        # whole flow because of one bad chunk, so we log and return empty text.
+        msg = str(e)
+        if "Invalid file format" in msg or "invalid file format" in msg:
+            # Swallow this as a soft failure.
+            from logging import getLogger
+            getLogger(__name__).warning(f"admin_voice_rules: skipping invalid STT chunk: {msg}")
+            return ChunkTranscriptionResponse(text="")
         raise HTTPException(status_code=500, detail=f"STT failed: {e}")
 
     return ChunkTranscriptionResponse(text=text)
