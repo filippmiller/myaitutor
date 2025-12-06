@@ -19,12 +19,34 @@ class LessonSession(SQLModel, table=True):
     started_at: datetime = Field(default_factory=datetime.utcnow)
     ended_at: Optional[datetime] = None
     duration_seconds: Optional[int] = None
-    status: str = Field(default="active") # active, completed, error
+    # active, paused, completed, error
+    status: str = Field(default="active")
+
+    # Pause/Resume metadata for a single logical lesson that can be paused multiple times
+    pause_count: int = Field(default=0)
+    last_pause_summary: Optional[str] = None  # Short summary of what was covered before the last pause
+    last_paused_at: Optional[datetime] = None
+    last_resumed_at: Optional[datetime] = None
     
     # Language Mode Selection (for session-specific language preferences)
     language_mode: Optional[str] = Field(default=None)  # EN_ONLY, RU_ONLY, MIXED
     language_level: Optional[int] = Field(default=None)  # 1-5 scale for English intensity in MIXED mode
     language_chosen_at: Optional[datetime] = Field(default=None)
+
+
+class LessonPauseEvent(SQLModel, table=True):
+    """Single pause/resume pair within a lesson.
+
+    Used for analytics and debugging: stores when lesson was paused/resumed and
+    what the tutor summarized as "what we did before the break".
+    """
+    __tablename__ = "lesson_pause_events"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    lesson_session_id: int = Field(foreign_key="lesson_sessions.id", index=True)
+    paused_at: datetime = Field(default_factory=datetime.utcnow)
+    resumed_at: Optional[datetime] = None
+    summary_text: Optional[str] = None  # 1–2 sentence summary at the moment of pause
+    reason: Optional[str] = None  # Optional admin/system reason label
 
 
 class LessonTurn(SQLModel, table=True):

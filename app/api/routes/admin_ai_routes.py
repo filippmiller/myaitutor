@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from app.database import get_session
 from app.models import (
     UserAccount, TutorRule, TutorRuleVersion, 
-    LessonSession, UserState
+    LessonSession, UserState, LessonPauseEvent
 )
 from app.services.auth_service import get_current_user
 from app.services.admin_ai_service import process_admin_message
@@ -298,6 +298,53 @@ def get_session_count(
         "from_date": from_date or "beginning",
         "to_date": to_date or "now"
     }
+
+@router.get("/analytics/lesson-pauses/recent")
+def get_recent_lesson_pauses(
+    days: int = 7,
+    limit: int = 50,
+    current_user: UserAccount = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Return recent lesson pauses for admin analytics.
+
+    Each entry describes a single pause/resume pair (if resumed), including the
+    student and a short summary of what was done before the break.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    from_date = datetime.utcnow() - timedelta(days=days)
+
+    statement = (
+        select(LessonPauseEvent, LessonSession, UserAccount)
+        .join(LessonSession, LessonPauseEvent.lesson_session_id == LessonSession.id)
+        .join(UserAccount, LessonSession.user_account_id == UserAccount.id)
+        .where(LessonPauseEvent.paused_at >= from_date)
+        .order_by(LessonPauseEvent.paused_at.desc())
+        .limit(limit)
+    )
+
+    rows = session.exec(statement).all()
+    results = []
+    for pause, lesson, user in rows:
+        results.append({
+            "pause_id": pause.id,
+            "lesson_session_id": lesson.id,
+            "paused_at": pause.paused_at.isoformat(),
+            "resumed_at": pause.resumed_at.isoformat() if pause.resumed_at else None,
+            "summary_text": pause.summary_text,
+            "student_id": user.id,
+            "student_email": user.email,
+            "pause_reason": pause.reason,
+        })
+
+    return {
+        "days": days,
+        "limit": limit,
+        "items": results,
+    }
+
 
 @router.get("/analytics/language-modes/distribution")
 def get_language_mode_distribution(

@@ -23,7 +23,12 @@ def get_tutor_memory_for_user(session: Session, user_id: int) -> dict:
     }
     return memory
 
-def build_tutor_system_prompt(session: Session, user: UserProfile, lesson_session_id: Optional[int] = None) -> str:
+def build_tutor_system_prompt(
+    session: Session,
+    user: UserProfile,
+    lesson_session_id: Optional[int] = None,
+    is_resume: bool = False,
+) -> str:
     """
     Build the system prompt for the AI tutor.
     
@@ -70,14 +75,18 @@ def build_tutor_system_prompt(session: Session, user: UserProfile, lesson_sessio
     # Combine all new rules
     all_new_rules = list(global_rules) + list(student_rules) + list(session_rules)
     
-    # 3. Fetch Language Mode (if lesson_session_id provided)
+    # 3. Fetch Language Mode and pause metadata (if lesson_session_id provided)
     language_mode = None
     language_level = None
+    pause_count = 0
+    last_pause_summary: Optional[str] = None
     if lesson_session_id:
         lesson = session.get(LessonSession, lesson_session_id)
         if lesson:
             language_mode = lesson.language_mode
             language_level = lesson.language_level
+            pause_count = lesson.pause_count or 0
+            last_pause_summary = lesson.last_pause_summary
     
     # 4. Fetch User Preferences
     prefs = json.loads(user.preferences)
@@ -306,6 +315,24 @@ This is the student's FIRST message in this session. You MUST:
         prompt_parts.append(f"Last Lesson Summary: {memory['last_summary']}")
     if memory["weak_words"]:
         prompt_parts.append(f"Weak Words to Practice: {', '.join(memory['weak_words'])}")
+
+    # Pause / Resume context
+    if lesson_session_id and pause_count > 0:
+        prompt_parts.append("\\n**Pause / Resume Context:**")
+        prompt_parts.append(f"This lesson has been paused {pause_count} time(s) before.")
+        if last_pause_summary:
+            prompt_parts.append(f"Most recent pause summary (what you did before the break): {last_pause_summary}")
+
+    # If this is a resumed session, instruct the tutor how to continue
+    if is_resume:
+        prompt_parts.append("""\n**⏸️ RESUMED LESSON BEHAVIOR (AFTER A BREAK):**
+- The student has come back to the SAME lesson after a pause.
+- In your VERY NEXT MESSAGE you MUST:
+  1) Start with a very short "welcome back" style greeting (1–2 short sentences).
+  2) If you have a pause summary, briefly remind the student what you were doing before the break (in simple English).
+  3) Immediately continue the planned activity from where you stopped. Do NOT repeat your full introduction or the full lesson plan.
+- Keep this welcome-back moment SHORT, warm, and practical. Then go back into interactive practice.
+""")
         
     # Standard Instructions (can be partially replaced by rules, but keeping core logic here)
     prompt_parts.append("""\n**Core Behavior:**

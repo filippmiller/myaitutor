@@ -18,6 +18,23 @@ interface AnalyticsResponse {
     };
 }
 
+interface PauseEvent {
+    pause_id: number;
+    lesson_session_id: number;
+    paused_at: string;
+    resumed_at: string | null;
+    summary_text: string | null;
+    student_id: number;
+    student_email: string;
+    pause_reason: string | null;
+}
+
+interface PauseResponse {
+    days: number;
+    limit: number;
+    items: PauseEvent[];
+}
+
 export default function AdminAnalytics() {
     const [fromDate, setFromDate] = useState(() => {
         const d = new Date();
@@ -29,10 +46,15 @@ export default function AdminAnalytics() {
     const [data, setData] = useState<AnalyticsResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [pauses, setPauses] = useState<PauseResponse | null>(null);
 
     useEffect(() => {
         fetchData();
     }, [fromDate, toDate, groupBy]);
+
+    useEffect(() => {
+        fetchPauses();
+    }, [fromDate, toDate]);
 
     const fetchData = async () => {
         setLoading(true);
@@ -57,6 +79,19 @@ export default function AdminAnalytics() {
             setError(e.message);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const fetchPauses = async () => {
+        try {
+            const days = Math.max(1, Math.round((new Date(toDate).getTime() - new Date(fromDate).getTime()) / (1000 * 60 * 60 * 24)) || 7);
+            const res = await fetch(`/api/admin/analytics/lesson-pauses/recent?days=${days}&limit=50`);
+            if (!res.ok) throw new Error(await res.text());
+            const json = await res.json();
+            setPauses(json);
+        } catch (e) {
+            // Pause analytics are optional; log to console but don't block main analytics
+            console.error('Failed to load pause analytics', e);
         }
     };
 
@@ -137,7 +172,7 @@ export default function AdminAnalytics() {
             </div>
 
             {/* Table */}
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginBottom: '2rem' }}>
                 <thead>
                     <tr style={{ borderBottom: '1px solid #444' }}>
                         <th style={{ padding: '8px' }}>Period</th>
@@ -159,6 +194,35 @@ export default function AdminAnalytics() {
                     ))}
                 </tbody>
             </table>
+
+            {/* Recent Lesson Pauses */}
+            {pauses && pauses.items.length > 0 && (
+                <div style={{ marginTop: '2rem' }}>
+                    <h4>Recent Lesson Pauses (last {pauses.days} day(s))</h4>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                        <thead>
+                            <tr style={{ borderBottom: '1px solid #444' }}>
+                                <th style={{ padding: '6px' }}>When Paused</th>
+                                <th style={{ padding: '6px' }}>Student</th>
+                                <th style={{ padding: '6px' }}>Lesson ID</th>
+                                <th style={{ padding: '6px' }}>Resumed?</th>
+                                <th style={{ padding: '6px' }}>Summary (before break)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {pauses.items.map((p) => (
+                                <tr key={p.pause_id} style={{ borderBottom: '1px solid #333' }}>
+                                    <td style={{ padding: '6px' }}>{new Date(p.paused_at).toLocaleString()}</td>
+                                    <td style={{ padding: '6px' }}>{p.student_email}</td>
+                                    <td style={{ padding: '6px' }}>{p.lesson_session_id}</td>
+                                    <td style={{ padding: '6px' }}>{p.resumed_at ? 'Yes' : 'No'}</td>
+                                    <td style={{ padding: '6px', maxWidth: '400px' }}>{p.summary_text || '-'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 }

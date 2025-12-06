@@ -14,7 +14,7 @@ from sqlmodel import Session, select
 import websockets
 
 from app.database import get_session
-from app.models import AppSettings, UserAccount, UserProfile, AuthSession, LessonSession, LessonTurn
+from app.models import AppSettings, UserAccount, UserProfile, AuthSession, LessonSession, LessonTurn, LessonPauseEvent
 from app.services.yandex_service import YandexService, AudioConverter
 from app.services.voice_engine import get_voice_engine
 from app.services.tutor_service import build_tutor_system_prompt
@@ -75,7 +75,7 @@ async def echo_websocket(websocket: WebSocket):
 async def voice_websocket(websocket: WebSocket):
     await websocket.accept()
     logger.info(f"WebSocket connection accepted from {websocket.client}")
-    logger.info("Voice WS Version: 2025-12-05 Realtime (gpt-realtime) + Fallback")
+    logger.info("Voice WS Version: 2025-12-05 Realtime (gpt-realtime) + Fallback + Pause/Resume")
     
     # Manually create session
     from app.database import engine
@@ -84,7 +84,9 @@ async def voice_websocket(websocket: WebSocket):
     user: Optional[UserAccount] = None
     profile: Optional[UserProfile] = None
     api_key = None
-    settings = None
+    settings: Optional[AppSettings] = None
+    lesson_session: Optional[LessonSession] = None
+    is_resume: bool = False
     
     try:
         # 0. Authenticate User
@@ -113,6 +115,32 @@ async def voice_websocket(websocket: WebSocket):
             await websocket.close(code=1011)
             return
 
+        # 1b. Inspect query params for resume of an existing lesson session
+        qs = websocket.query_params
+        lesson_session_id_param = qs.get("lesson_session_id")
+        resume_flag = qs.get("resume")
+        if lesson_session_id_param:
+            try:
+                lesson_session_id_val = int(lesson_session_id_param)
+                lesson_session = session.get(LessonSession, lesson_session_id_val)
+                if not lesson_session:
+                    logger.warning(f"LessonSession {lesson_session_id_val} not found; starting a fresh session")
+                    lesson_session = None
+                else:
+                    # Security: ensure the session belongs to this user (if authenticated)
+                    if user and lesson_session.user_account_id != user.id:
+                        logger.warning(
+                            f"User {user.id} attempted to resume lesson_session {lesson_session.id} not owned by them"
+                        )
+                        lesson_session = None
+                    else:
+                        is_resume = bool(resume_flag and resume_flag != "0")
+                        logger.info(
+                            f"Resuming existing LessonSession {lesson_session.id} (is_resume={is_resume}, status={lesson_session.status})"
+                        )
+            except ValueError:
+                logger.warning(f"Invalid lesson_session_id query param: {lesson_session_id_param}")
+
         # Determine Preferences
         tts_engine_name = "openai"
         voice_id = "alloy"
@@ -138,7 +166,16 @@ async def voice_websocket(websocket: WebSocket):
         if use_realtime:
             try:
                 logger.info("Attempting OpenAI Realtime Session with model 'gpt-realtime' (audio+text)...")
-                await run_realtime_session(websocket, api_key, voice_id, profile, session, user=user)
+                await run_realtime_session(
+                    websocket,
+                    api_key,
+                    voice_id,
+                    profile,
+                    session,
+                    user=user,
+                    lesson_session=lesson_session,
+                    is_resume=is_resume,
+                )
                 return # If successful and finishes normally
             except Exception as e:
                 logger.error(f"Realtime Session failed: {e}", exc_info=True)
@@ -152,7 +189,18 @@ async def voice_websocket(websocket: WebSocket):
              # Create a dummy/default profile if needed or handle inside run_legacy_session
              # For now, we'll let it proceed but we should be aware.
              
-        await run_legacy_session(websocket, api_key, tts_engine_name, voice_id, profile, settings, session, user=user)
+        await run_legacy_session(
+            websocket,
+            api_key,
+            tts_engine_name,
+            voice_id,
+            profile,
+            settings,
+            session,
+            user=user,
+            lesson_session=lesson_session,
+            is_resume=is_resume,
+        )
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
@@ -170,29 +218,66 @@ async def run_realtime_session(
     profile: UserProfile | None,
     session: Session,
     user: UserAccount | None = None,
+    lesson_session: LessonSession | None = None,
+    is_resume: bool = False,
 ):
-    """Manage a session with the latest OpenAI Realtime API (gpt-realtime)."""
+    """Manage a session with the latest OpenAI Realtime API (gpt-realtime).
+
+    A single logical lesson can be resumed multiple times; we reuse the same
+    LessonSession row and track pauses separately in LessonPauseEvent.
+    """
     import subprocess
     import shutil
     from datetime import datetime
+    from openai import AsyncOpenAI
     
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
         raise RuntimeError("ffmpeg not found")
 
-    # Create LessonSession
-    lesson_session = LessonSession(
-        user_account_id=profile.user_account_id if profile else (user.id if user else None),
-        started_at=datetime.utcnow(),
-        language_mode=None,  # Will be set by interaction
-    )
-    session.add(lesson_session)
-    session.commit()
-    session.refresh(lesson_session)
-    logger.info(f"Created Realtime LessonSession {lesson_session.id}")
+    # Ensure we have AppSettings for default model (used for summaries)
+    settings: Optional[AppSettings] = session.get(AppSettings, 1)
+
+    # Create or reuse LessonSession
+    if lesson_session is None:
+        lesson_session = LessonSession(
+            user_account_id=profile.user_account_id if profile else (user.id if user else None),
+            started_at=datetime.utcnow(),
+            language_mode=None,  # Will be set by interaction
+            status="active",
+        )
+        session.add(lesson_session)
+        session.commit()
+        session.refresh(lesson_session)
+        logger.info(f"Created Realtime LessonSession {lesson_session.id}")
+    else:
+        # Mark resumed
+        lesson_session.status = "active"
+        lesson_session.last_resumed_at = datetime.utcnow()
+        session.add(lesson_session)
+        # Close the latest open LessonPauseEvent for this session, if any
+        try:
+            last_pause = session.exec(
+                select(LessonPauseEvent)
+                .where(LessonPauseEvent.lesson_session_id == lesson_session.id)
+                .where(LessonPauseEvent.resumed_at == None)  # type: ignore
+                .order_by(LessonPauseEvent.paused_at.desc())
+            ).first()
+            if last_pause:
+                last_pause.resumed_at = lesson_session.last_resumed_at
+                session.add(last_pause)
+        except Exception as e:
+            logger.error(f"Failed to mark LessonPauseEvent as resumed: {e}")
+        session.commit()
+        logger.info(f"Reusing existing LessonSession {lesson_session.id} (resume={is_resume})")
 
     # Build System Prompt
-    system_prompt = build_tutor_system_prompt(session, profile, lesson_session_id=lesson_session.id)
+    system_prompt = build_tutor_system_prompt(
+        session,
+        profile,
+        lesson_session_id=lesson_session.id,
+        is_resume=is_resume,
+    )
     
     # Log system prompt details
     logger.info("=" * 80)
@@ -203,6 +288,17 @@ async def run_realtime_session(
     logger.info(f"  System Prompt Length: {len(system_prompt)} characters")
     logger.info(f"  System Prompt (First 500 chars):\n{system_prompt[:500]}")
     logger.info("=" * 80)
+
+    # Notify frontend about the logical lesson ID so it can resume later
+    try:
+        await websocket.send_json(
+            {
+                "type": "lesson_info",
+                "lesson_session_id": lesson_session.id,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to send lesson_info to frontend: {e}")
 
     # Prepare prompt log snapshot (we'll fill greeting + STT config later)
     prompt_log_data = {
@@ -315,6 +411,48 @@ async def run_realtime_session(
         greeting_triggered = False  # Flag to prevent multiple greeting triggers
         stt_language = "en-US"  # Logged from config message
         
+        async def _generate_pause_summary() -> Optional[str]:
+            """Generate a 1–2 sentence summary of the lesson so far for resume."""
+            try:
+                turns = session.exec(
+                    select(LessonTurn)
+                    .where(LessonTurn.session_id == lesson_session.id)
+                    .order_by(LessonTurn.id)
+                ).all()
+                if not turns:
+                    return None
+
+                dialogue_lines = []
+                for t in turns:
+                    speaker_label = "Tutor" if t.speaker == "assistant" else "Student"
+                    dialogue_lines.append(f"{speaker_label}: {t.text}")
+                dialogue_text = "\n".join(dialogue_lines)
+
+                client = AsyncOpenAI(api_key=api_key)
+                model_name = (settings.default_model if settings and settings.default_model else "gpt-4o-mini")
+                system_msg = (
+                    "You are summarizing an English lesson between a tutor and a student. "
+                    "Given the dialogue so far, write 1–2 short sentences in English that can follow "
+                    "the phrase 'Before the break, ...'. Focus on what was practiced (topics, grammar, skills)."
+                )
+                user_msg = (
+                    "Dialogue so far:\n" + dialogue_text + "\n\n" +
+                    "Write 1–2 short sentences (in English) that summarize what they have done so far."
+                )
+                completion = await client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    max_tokens=120,
+                )
+                summary = completion.choices[0].message.content or ""
+                return summary.strip()
+            except Exception as e:
+                logger.error(f"Failed to generate pause summary: {e}", exc_info=True)
+                return None
+
         async def frontend_to_openai():
             """Read from frontend WebSocket, convert, send to OpenAI."""
             nonlocal greeting_triggered, prompt_log_data, stt_language
@@ -399,6 +537,62 @@ async def run_realtime_session(
                                         "level": "warning",
                                         "message": f"Failed to trigger greeting: {str(greeting_error)}. The lesson will continue, but you may need to speak first."
                                     })
+
+                            elif data.get("type") == "system_event" and data.get("event") == "lesson_paused":
+                                # Pause the lesson: generate a short summary, store it, and close connections.
+                                logger.info("Realtime: Received lesson_paused. Generating summary and marking session paused...")
+                                from datetime import datetime as _dt
+                                try:
+                                    summary = await _generate_pause_summary()
+                                    now = _dt.utcnow()
+
+                                    # Update LessonSession
+                                    lesson_session.status = "paused"
+                                    lesson_session.pause_count = (lesson_session.pause_count or 0) + 1
+                                    lesson_session.last_paused_at = now
+                                    if summary:
+                                        lesson_session.last_pause_summary = summary
+                                    session.add(lesson_session)
+
+                                    # Create LessonPauseEvent
+                                    pause_event = LessonPauseEvent(
+                                        lesson_session_id=lesson_session.id,
+                                        paused_at=now,
+                                        summary_text=summary,
+                                    )
+                                    session.add(pause_event)
+                                    session.commit()
+
+                                    payload = {
+                                        "type": "system",
+                                        "level": "info",
+                                        "message": "Lesson paused.",
+                                    }
+                                    if summary:
+                                        payload["resume_hint"] = summary
+                                    await websocket.send_json(payload)
+                                except Exception as pause_error:
+                                    logger.error(f"Realtime: Failed to handle lesson_paused: {pause_error}", exc_info=True)
+                                    try:
+                                        await websocket.send_json({
+                                            "type": "system",
+                                            "level": "error",
+                                            "message": "Failed to pause lesson cleanly. You may need to restart.",
+                                        })
+                                    except Exception:
+                                        pass
+                                finally:
+                                    # Close both OpenAI and frontend websockets to fully pause billing/streaming.
+                                    try:
+                                        await openai_ws.close()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        await websocket.close(code=1000, reason="lesson_paused")
+                                    except Exception:
+                                        pass
+                                    # Break receive loop
+                                    return
                         except Exception as e:
                             logger.error(f"Realtime: Error handling text message: {e}")
             except WebSocketDisconnect:
@@ -708,6 +902,8 @@ async def run_legacy_session(
     settings: AppSettings,
     session: Session,
     user: UserAccount | None = None,
+    lesson_session: LessonSession | None = None,
+    is_resume: bool = False,
 ):
     """Legacy implementation using VAD + Whisper + TTS (OpenAI/Yandex)."""
     # Initialize Services
@@ -720,20 +916,46 @@ async def run_legacy_session(
         await websocket.close(code=1011)
         return
 
-    # Create LessonSession
+    # Create or reuse LessonSession
     from datetime import datetime
-    lesson_session = LessonSession(
-        user_account_id=profile.user_account_id if profile else (user.id if user else None),
-        started_at=datetime.utcnow(),
-        language_mode=None # Will be set by interaction
-    )
-    session.add(lesson_session)
-    session.commit()
-    session.refresh(lesson_session)
-    logger.info(f"Created LessonSession {lesson_session.id}")
+    if lesson_session is None:
+        lesson_session = LessonSession(
+            user_account_id=profile.user_account_id if profile else (user.id if user else None),
+            started_at=datetime.utcnow(),
+            language_mode=None,  # Will be set by interaction
+            status="active",
+        )
+        session.add(lesson_session)
+        session.commit()
+        session.refresh(lesson_session)
+        logger.info(f"Created LessonSession {lesson_session.id}")
+    else:
+        lesson_session.status = "active"
+        lesson_session.last_resumed_at = datetime.utcnow()
+        session.add(lesson_session)
+        # Close last open LessonPauseEvent if any
+        try:
+            last_pause = session.exec(
+                select(LessonPauseEvent)
+                .where(LessonPauseEvent.lesson_session_id == lesson_session.id)
+                .where(LessonPauseEvent.resumed_at == None)  # type: ignore
+                .order_by(LessonPauseEvent.paused_at.desc())
+            ).first()
+            if last_pause:
+                last_pause.resumed_at = lesson_session.last_resumed_at
+                session.add(last_pause)
+        except Exception as e:
+            logger.error(f"Legacy: Failed to mark LessonPauseEvent as resumed: {e}")
+        session.commit()
+        logger.info(f"Legacy: Reusing LessonSession {lesson_session.id} (resume={is_resume})")
 
     # Build System Prompt
-    system_prompt = build_tutor_system_prompt(session, profile, lesson_session_id=lesson_session.id)
+    system_prompt = build_tutor_system_prompt(
+        session,
+        profile,
+        lesson_session_id=lesson_session.id,
+        is_resume=is_resume,
+    )
 
     # Prepare prompt log snapshot (filled with greeting + STT later)
     prompt_log_data = {
@@ -872,6 +1094,49 @@ async def run_legacy_session(
             logger.error(f"LLM Error: {e}")
 
     # Loops
+    async def _generate_pause_summary_legacy() -> Optional[str]:
+        """Generate a 1–2 sentence summary for legacy session."""
+        try:
+            turns = session.exec(
+                select(LessonTurn)
+                .where(LessonTurn.session_id == lesson_session.id)
+                .order_by(LessonTurn.id)
+            ).all()
+            if not turns:
+                return None
+
+            dialogue_lines = []
+            for t in turns:
+                speaker_label = "Tutor" if t.speaker == "assistant" else "Student"
+                dialogue_lines.append(f"{speaker_label}: {t.text}")
+            dialogue_text = "\n".join(dialogue_lines)
+
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=api_key)
+            model_name = settings.default_model
+            system_msg = (
+                "You are summarizing an English lesson between a tutor and a student. "
+                "Given the dialogue so far, write 1–2 short sentences in English that can follow "
+                "the phrase 'Before the break, ...'. Focus on what was practiced (topics, grammar, skills)."
+            )
+            user_msg = (
+                "Dialogue so far:\n" + dialogue_text + "\n\n" +
+                "Write 1–2 short sentences (in English) that summarize what they have done so far."
+            )
+            completion = await client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                max_tokens=120,
+            )
+            summary = completion.choices[0].message.content or ""
+            return summary.strip()
+        except Exception as e:
+            logger.error(f"Legacy: Failed to generate pause summary: {e}", exc_info=True)
+            return None
+
     async def receive_loop():
         try:
             while True:
@@ -953,6 +1218,55 @@ async def run_legacy_session(
                                     "level": "error",
                                     "message": f"Failed to generate greeting: {str(e)}. Please try speaking first."
                                 })
+
+                        elif data.get("type") == "system_event" and data.get("event") == "lesson_paused":
+                            # Pause in legacy mode: generate summary, store, and close.
+                            logger.info("Legacy: Received lesson_paused. Generating summary and marking session paused...")
+                            from datetime import datetime as _dt
+                            try:
+                                summary = await _generate_pause_summary_legacy()
+                                now = _dt.utcnow()
+
+                                lesson_session.status = "paused"
+                                lesson_session.pause_count = (lesson_session.pause_count or 0) + 1
+                                lesson_session.last_paused_at = now
+                                if summary:
+                                    lesson_session.last_pause_summary = summary
+                                session.add(lesson_session)
+
+                                pause_event = LessonPauseEvent(
+                                    lesson_session_id=lesson_session.id,
+                                    paused_at=now,
+                                    summary_text=summary,
+                                )
+                                session.add(pause_event)
+                                session.commit()
+
+                                payload = {
+                                    "type": "system",
+                                    "level": "info",
+                                    "message": "Lesson paused.",
+                                }
+                                if summary:
+                                    payload["resume_hint"] = summary
+                                await websocket.send_json(payload)
+                            except Exception as pause_error:
+                                logger.error(f"Legacy: Failed to handle lesson_paused: {pause_error}", exc_info=True)
+                                try:
+                                    await websocket.send_json({
+                                        "type": "system",
+                                        "level": "error",
+                                        "message": "Failed to pause lesson cleanly. You may need to restart.",
+                                    })
+                                except Exception:
+                                    pass
+                            finally:
+                                try:
+                                    await websocket.close(code=1000, reason="lesson_paused")
+                                except Exception:
+                                    pass
+                                converter.close_stdin()
+                                return
                     except Exception as e:
                         logger.error(f"Legacy: Error handling text message: {e}")
         except WebSocketDisconnect:

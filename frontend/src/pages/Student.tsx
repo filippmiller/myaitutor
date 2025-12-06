@@ -21,7 +21,7 @@ export default function Student() {
         pains: ''
     });
     const [isRecording, setIsRecording] = useState(false);
-    const [connectionStatus, setConnectionStatus] = useState('Disconnected');
+    const [connectionStatus, setConnectionStatus] = useState<'Disconnected' | 'Connecting...' | 'Connected' | 'Paused' | 'Error'>('Disconnected');
     const [transcript, setTranscript] = useState<Array<{ role: string, text: string, final?: boolean }>>([]);
     const [sttLanguage, setSttLanguage] = useState<'ru-RU' | 'en-US'>('ru-RU');
 
@@ -33,6 +33,7 @@ export default function Student() {
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
+    const lessonSessionIdRef = useRef<number | null>(null);
     const chatEndRef = useRef<HTMLDivElement | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
 
@@ -92,7 +93,7 @@ export default function Student() {
         alert('Profile saved!');
     };
 
-    const startLesson = async () => {
+    const startLesson = async (isResume: boolean) => {
         console.log('🚀 [START LESSON] Initiating...');
         try {
             // 1. Get Microphone Access
@@ -108,9 +109,17 @@ export default function Student() {
             // 3. Connect WebSocket
             const isDev = window.location.hostname === 'localhost';
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = isDev
+            let wsUrl = isDev
                 ? 'ws://localhost:8000/api/ws/voice'
                 : `${protocol}//${window.location.host}/api/ws/voice`;
+
+            if (isResume && lessonSessionIdRef.current) {
+                const params = new URLSearchParams({
+                    lesson_session_id: String(lessonSessionIdRef.current),
+                    resume: '1',
+                });
+                wsUrl += `?${params.toString()}`;
+            }
             console.log(`🔌 [WEBSOCKET] Creating connection to: ${wsUrl}`);
             const ws = new WebSocket(wsUrl);
             wsRef.current = ws;
@@ -155,7 +164,13 @@ export default function Student() {
                         const msg = JSON.parse(event.data);
                         console.log('📨 [WEBSOCKET] Received:', msg);
 
-                        if (msg.type === 'transcript') {
+                        if (msg.type === 'lesson_info') {
+                            // Backend tells us which logical LessonSession this WS belongs to (for pause/resume)
+                            if (typeof msg.lesson_session_id === 'number') {
+                                lessonSessionIdRef.current = msg.lesson_session_id;
+                                console.log('📚 [LESSON] lesson_session_id =', msg.lesson_session_id);
+                            }
+                        } else if (msg.type === 'transcript') {
                             console.log(`💬 [TRANSCRIPT] ${msg.role}: ${msg.text}`);
 
                             // If user spoke, stop any current AI speech immediately
@@ -184,6 +199,13 @@ export default function Student() {
                             console.log(`[SYSTEM] ${msg.level}: ${msg.message}`);
                             if (msg.level === 'error') {
                                 alert(`Error: ${msg.message}`);
+                                setConnectionStatus('Error');
+                            } else if (msg.level === 'info' && msg.message === 'Lesson paused.') {
+                                // Server confirmed pause; keep WS open until it closes, UI already stopped mic/audio.
+                                setConnectionStatus('Paused');
+                                if (msg.resume_hint) {
+                                    console.log('📝 [PAUSE SUMMARY]', msg.resume_hint);
+                                }
                             }
                         }
                     } catch (e) {
@@ -195,19 +217,24 @@ export default function Student() {
             ws.onclose = (event) => {
                 console.log(`❌ [WEBSOCKET] Connection CLOSED - Code: ${event.code}, Reason: ${event.reason || 'No reason provided'}, Clean: ${event.wasClean}`);
 
-                let statusMsg = 'Disconnected';
-                if (event.code !== 1000 && event.code !== 1001 && event.code !== 1005) {
-                    statusMsg = `Error: ${event.reason || 'Connection failed'}`;
-                    // Also show alert for visibility
-                    if (event.reason) {
-                        alert(`Connection closed: ${event.reason}`);
+                if (event.code === 1000 && event.reason === 'lesson_paused') {
+                    // Graceful pause initiated by server
+                    setConnectionStatus('Paused');
+                } else {
+                    let statusMsg: typeof connectionStatus = 'Disconnected';
+                    if (event.code !== 1000 && event.code !== 1001 && event.code !== 1005) {
+                        statusMsg = 'Error';
+                        // Also show alert for visibility
+                        if (event.reason) {
+                            alert(`Connection closed: ${event.reason}`);
+                        }
                     }
+                    setConnectionStatus(statusMsg);
                 }
 
-                setConnectionStatus(statusMsg);
                 setIsRecording(false);
                 stopMediaRecorder();
-                console.log('🛑 [STATE] Connection status: Disconnected, Recording stopped');
+                console.log('🛑 [STATE] Connection closed, Recording stopped');
             };
 
             ws.onerror = (e) => {
@@ -229,12 +256,29 @@ export default function Student() {
         }
     };
 
-    const stopLesson = () => {
-        if (wsRef.current) {
-            wsRef.current.close();
+    const pauseLesson = () => {
+        console.log('⏸️ [LESSON] Pause requested');
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'system_event', event: 'lesson_paused' }));
         }
         stopMediaRecorder();
         stopAudioPlayback();
+        setIsRecording(false);
+        // Actual status will be set to 'Paused' when server confirms or closes with reason
+    };
+
+    const stopLesson = () => {
+        console.log('🟥 [LESSON] End requested');
+        if (wsRef.current) {
+            try {
+                wsRef.current.close();
+            } catch (e) {
+                // ignore
+            }
+        }
+        stopMediaRecorder();
+        stopAudioPlayback();
+        lessonSessionIdRef.current = null;
         setIsRecording(false);
         setConnectionStatus('Disconnected');
     };
@@ -381,7 +425,16 @@ export default function Student() {
 
                         {!isRecording ? (
                             <button
-                                onClick={startLesson}
+                                onClick={() => {
+                                    if (connectionStatus === 'Paused' && lessonSessionIdRef.current) {
+                                        // Resume existing lesson
+                                        startLesson(true);
+                                    } else {
+                                        // Start new lesson
+                                        lessonSessionIdRef.current = null;
+                                        startLesson(false);
+                                    }
+                                }}
                                 style={{
                                     backgroundColor: '#4CAF50',
                                     fontSize: '1.2em',
@@ -390,21 +443,35 @@ export default function Student() {
                                     padding: '15px'
                                 }}
                             >
-                                Start Live Lesson
+                                {connectionStatus === 'Paused' && lessonSessionIdRef.current
+                                    ? 'Resume Lesson'
+                                    : 'Start Live Lesson'}
                             </button>
                         ) : (
-                            <button
-                                onClick={stopLesson}
-                                style={{
-                                    backgroundColor: '#f44336',
-                                    fontSize: '1.2em',
-                                    width: '100%',
-                                    marginBottom: '20px',
-                                    padding: '15px'
-                                }}
-                            >
-                                End Lesson
-                            </button>
+                            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '20px' }}>
+                                <button
+                                    onClick={pauseLesson}
+                                    style={{
+                                        backgroundColor: '#ff9800',
+                                        fontSize: '1.1em',
+                                        flex: 1,
+                                        padding: '15px',
+                                    }}
+                                >
+                                    Pause Lesson
+                                </button>
+                                <button
+                                    onClick={stopLesson}
+                                    style={{
+                                        backgroundColor: '#f44336',
+                                        fontSize: '1.1em',
+                                        flex: 1,
+                                        padding: '15px',
+                                    }}
+                                >
+                                    End Lesson
+                                </button>
+                            </div>
                         )}
 
                         <div className="status-indicator" style={{ marginBottom: '10px', color: '#888' }}>
