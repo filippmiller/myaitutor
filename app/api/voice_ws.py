@@ -15,8 +15,9 @@ import websockets
 
 from app.database import get_session
 from app.models import AppSettings, UserAccount, UserProfile, AuthSession, LessonSession, LessonTurn, LessonPauseEvent, DebugSettings
-from app.services.tutor_service import build_tutor_system_prompt
+from app.services.tutor_service import build_tutor_system_prompt, should_run_intro_session
 from app.services.language_utils import parse_language_mode_marker, strip_language_markers
+from app.services.profile_service import apply_intro_profile_updates
 
 from collections import deque
 
@@ -345,6 +346,10 @@ async def run_realtime_session(
         session.commit()
         logger.info(f"Reusing existing LessonSession {lesson_session.id} (resume={is_resume})")
 
+    # Determine whether this lesson should run intro/onboarding mode
+    intro_mode = should_run_intro_session(session, profile, lesson_session.id)
+    logger.info(f"Intro mode for lesson {lesson_session.id}: {intro_mode}")
+
     # Build System Prompt
     system_prompt = build_tutor_system_prompt(
         session,
@@ -362,6 +367,23 @@ async def run_realtime_session(
     logger.info(f"  System Prompt Length: {len(system_prompt)} characters")
     logger.info(f"  System Prompt (First 500 chars):\n{system_prompt[:500]}")
     logger.info("=" * 80)
+
+    # 🆕 Initialize Multi-Pipeline Manager
+    from app.services.lesson_pipeline_manager import LessonPipelineManager
+    
+    pipeline_manager = None
+    if user:
+        try:
+            pipeline_manager = LessonPipelineManager(session, user)
+            tutor_lesson = pipeline_manager.start_lesson(legacy_session_id=lesson_session.id)
+            logger.info(
+                f"✅ Multi-Pipeline Manager initialized - "
+                f"Lesson #{tutor_lesson.lesson_number}, "
+                f"First lesson: {tutor_lesson.is_first_lesson}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize pipeline manager: {e}", exc_info=True)
+            # Continue without pipeline manager (graceful degradation)
 
     # Notify frontend about the logical lesson ID so it can resume later
     try:
@@ -542,7 +564,7 @@ async def run_realtime_session(
 
         async def frontend_to_openai():
             """Read from frontend WebSocket, convert, send to OpenAI."""
-            nonlocal greeting_triggered, prompt_log_data, stt_language
+            nonlocal greeting_triggered, prompt_log_data, stt_language, intro_mode
             try:
                 while True:
                     message = await websocket.receive()
@@ -574,16 +596,29 @@ async def run_realtime_session(
                                 logger.info("Realtime: Received lesson_started. Triggering greeting...")
                                 
                                 try:
-                                    # System prompt already includes Universal Greeting Protocol
-                                    # Trigger first interaction - OpenAI will follow the system prompt automatically
                                     user_name = profile.name if profile and profile.name else "Student"
-                                    greeting_text = (
-                                        "System Event: Lesson Starting Now. This is the FIRST interaction with the "
-                                        f"student. The student's name is {user_name}. Follow the Universal Greeting "
-                                        "Protocol strictly: greet them warmly using their name, mention any last "
-                                        "session summary if available, and start an immediate activity without "
-                                        "asking meta-questions."
-                                    )
+
+                                    if intro_mode:
+                                        # First-ever lesson: trigger dedicated onboarding flow
+                                        greeting_text = (
+                                            "System Event: First-Time Onboarding. This is the student's very first "
+                                            "lesson with you. Run the onboarding flow described in your system "
+                                            "instructions: greet them warmly, explain that you are an AI English "
+                                            "tutor, then follow the steps to choose your name, their preferred "
+                                            "name, age (optional), ты/вы, style, goals, interests, languages, "
+                                            "correction style and self-assessed level. After each stable fact, "
+                                            "emit [PROFILE_UPDATE] JSON markers as specified."
+                                        )
+                                    else:
+                                        # System prompt already includes Universal Greeting Protocol
+                                        # Trigger first interaction - OpenAI will follow the system prompt automatically
+                                        greeting_text = (
+                                            "System Event: Lesson Starting Now. This is the FIRST interaction with the "
+                                            f"student. The student's name is {user_name}. Follow the Universal Greeting "
+                                            "Protocol strictly: greet them warmly using their name, mention any last "
+                                            "session summary if available, and start an immediate activity without "
+                                            "asking meta-questions."
+                                        )
                                     
                                     # Update prompt log with the concrete greeting event prompt
                                     prompt_log_data["greeting_event_prompt"] = greeting_text
@@ -759,7 +794,7 @@ async def run_realtime_session(
                         transcript = event.get("transcript")
                         if transcript:
                             await websocket.send_json({"type": "transcript", "role": "user", "text": transcript})
-                            # Save User Turn
+                            # Save User Turn (legacy)
                             turn = LessonTurn(
                                 session_id=lesson_session.id,
                                 speaker="user",
@@ -767,6 +802,16 @@ async def run_realtime_session(
                             )
                             session.add(turn)
                             session.commit()
+                            
+                            # 🆕 Save to new pipeline
+                            if pipeline_manager:
+                                try:
+                                    pipeline_manager.save_turn(
+                                        user_text=transcript,
+                                        tutor_text=None
+                                    )
+                                except Exception as pm_err:
+                                    logger.error(f"Pipeline manager failed to save user turn: {pm_err}")
                             
                     elif event_type == "session.updated":
                         # Session update confirmed by OpenAI
@@ -841,7 +886,7 @@ async def run_realtime_session(
                             logger.warning(f"Realtime: response.output_item.done - no transcript found in item structure")
                         
                         if transcript:
-                            # Always save Assistant Turn (greeting, normal responses, etc.)
+                            # Always save Assistant Turn (greeting, normal responses, etc.) (legacy)
                             turn = LessonTurn(
                                 session_id=lesson_session.id,
                                 speaker="assistant",
@@ -850,6 +895,23 @@ async def run_realtime_session(
                             session.add(turn)
                             session.commit()
                             logger.info(f"Realtime: Saved assistant transcript (length: {len(transcript)})")
+                            
+                            # 🆕 Save to new pipeline
+                            if pipeline_manager:
+                                try:
+                                    pipeline_manager.save_turn(
+                                        user_text=None,
+                                        tutor_text=transcript
+                                    )
+                                except Exception as pm_err:
+                                    logger.error(f"Pipeline manager failed to save assistant turn: {pm_err}")
+                            
+                            # Apply onboarding profile updates, if any
+                            if profile is not None:
+                                try:
+                                    apply_intro_profile_updates(session, profile, transcript)
+                                except Exception as e:
+                                    logger.error(f"Failed to apply intro profile updates: {e}", exc_info=True)
                             
                             # Check for language mode markers (separate from saving)
                             marker = parse_language_mode_marker(transcript)
@@ -1101,6 +1163,22 @@ async def run_legacy_session(
     except Exception as e:
         logger.error(f"Legacy: failed to write initial prompt log for lesson {lesson_session.id}: {e}")
 
+    # 🆕 Initialize Multi-Pipeline Manager (same as realtime)
+    from app.services.lesson_pipeline_manager import LessonPipelineManager
+    
+    pipeline_manager = None
+    if user:
+        try:
+            pipeline_manager = LessonPipelineManager(session, user)
+            tutor_lesson = pipeline_manager.start_lesson(legacy_session_id=lesson_session.id)
+            logger.info(
+                f"✅ Legacy: Multi-Pipeline Manager initialized - "
+                f"Lesson #{tutor_lesson.lesson_number}, "
+                f"First lesson: {tutor_lesson.is_first_lesson}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Legacy: Failed to initialize pipeline manager: {e}", exc_info=True)
+
     # State
     conversation_history = [
         {"role": "system", "content": system_prompt}
@@ -1143,7 +1221,7 @@ async def run_legacy_session(
         await websocket.send_json({"type": "transcript", "role": "user", "text": text})
         conversation_history.append({"role": "user", "content": text})
         
-        # Save User Turn
+        # Save User Turn (legacy)
         turn = LessonTurn(
             session_id=lesson_session.id,
             speaker="user",
@@ -1151,6 +1229,13 @@ async def run_legacy_session(
         )
         session.add(turn)
         session.commit()
+        
+        # 🆕 Save to new pipeline
+        if pipeline_manager:
+            try:
+                pipeline_manager.save_turn(user_text=text, tutor_text=None)
+            except Exception as pm_err:
+                logger.error(f"Legacy: Pipeline manager failed to save user turn: {pm_err}")
         
         try:
             from openai import AsyncOpenAI
@@ -1190,7 +1275,7 @@ async def run_legacy_session(
                 
             conversation_history.append({"role": "assistant", "content": full_resp})
             
-            # Save Assistant Turn
+            # Save Assistant Turn (legacy)
             turn = LessonTurn(
                 session_id=lesson_session.id,
                 speaker="assistant",
@@ -1198,6 +1283,13 @@ async def run_legacy_session(
             )
             session.add(turn)
             session.commit()
+            
+            # 🆕 Save to new pipeline
+            if pipeline_manager:
+                try:
+                    pipeline_manager.save_turn(user_text=None, tutor_text=full_resp)
+                except Exception as pm_err:
+                    logger.error(f"Legacy: Pipeline manager failed to save assistant turn: {pm_err}")
             
             # Check for language mode markers
             marker = parse_language_mode_marker(full_resp)

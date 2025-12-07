@@ -48,6 +48,9 @@ app.include_router(admin_voice_rules.router, prefix="/api/admin/voice-rules", ta
 from app.api.routes import lesson_routes
 app.include_router(lesson_routes.router, prefix="/api", tags=["lessons"])
 
+from app.api.routes import admin_tutor
+app.include_router(admin_tutor.router, prefix="/api/admin/tutor", tags=["admin_tutor"])
+
 # Static files (Audio)
 os.makedirs("static/audio", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")

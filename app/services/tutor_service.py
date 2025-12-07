@@ -1,7 +1,72 @@
 import json
 from typing import Optional
 from sqlmodel import Session, select
-from app.models import UserProfile, UserState, TutorSystemRule, SessionSummary, TutorRule, LessonSession, LessonPauseEvent
+from app.models import (
+    UserProfile, UserState, TutorSystemRule, SessionSummary, TutorRule, 
+    LessonSession, LessonPauseEvent, TutorLesson, TutorStudentKnowledge
+)
+
+
+def get_or_create_student_knowledge(session: Session, user_id: int) -> TutorStudentKnowledge:
+    """Get or create student knowledge record."""
+    knowledge = session.get(TutorStudentKnowledge, user_id)
+    if not knowledge:
+        knowledge = TutorStudentKnowledge(
+            user_id=user_id,
+            level="A1",
+            lesson_count=0,
+            first_lesson_completed=False
+        )
+        session.add(knowledge)
+        session.commit()
+        session.refresh(knowledge)
+    return knowledge
+
+
+def get_next_lesson_number(session: Session, user_id: int) -> int:
+    """Get the next lesson number for a user."""
+    # Check for existing lessons
+    statement = (
+        select(TutorLesson)
+        .where(TutorLesson.user_id == user_id)
+        .order_by(TutorLesson.lesson_number.desc())
+        .limit(1)
+    )
+    last_lesson = session.exec(statement).first()
+    
+    if last_lesson:
+        return last_lesson.lesson_number + 1
+    else:
+        return 1
+
+
+def is_first_lesson(session: Session, user_id: int) -> bool:
+    """Check if this is the user's first lesson (needs intro + placement test)."""
+    knowledge = session.get(TutorStudentKnowledge, user_id)
+    if not knowledge:
+        return True
+    return not knowledge.first_lesson_completed
+
+
+def create_tutor_lesson(
+    session: Session,
+    user_id: int,
+    lesson_number: int,
+    is_first: bool = False,
+    legacy_session_id: Optional[int] = None
+) -> TutorLesson:
+    """Create a new tutor lesson record."""
+    lesson = TutorLesson(
+        user_id=user_id,
+        lesson_number=lesson_number,
+        is_first_lesson=is_first,
+        placement_test_run=False,
+        legacy_session_id=legacy_session_id
+    )
+    session.add(lesson)
+    session.commit()
+    session.refresh(lesson)
+    return lesson
 
 def get_tutor_memory_for_user(session: Session, user_id: int) -> dict:
     # Get UserState
@@ -21,6 +86,211 @@ def get_tutor_memory_for_user(session: Session, user_id: int) -> dict:
         "last_summary": last_summary.summary_text if last_summary else None
     }
     return memory
+
+def should_run_intro_session(
+    session: Session,
+    user: Optional[UserProfile],
+    lesson_session_id: Optional[int],
+) -> bool:
+    """Determine whether this lesson should run the onboarding intro flow.
+
+    Current policy (v1):
+    - If there is no UserProfile or no lesson_session_id → do NOT run intro.
+    - If `preferences.intro.intro_completed` is True → intro уже пройден, не запускать.
+    - Во всех остальных случаях (intro ещё не проходили) → запускать онбординг,
+      независимо от количества прошлых LessonSession.
+
+    Это соответствует продуктовой идее «снести старый первый урок» и гарантировать,
+    что каждый аккаунт пройдёт новое знакомство хотя бы один раз.
+    """
+    if not user or not lesson_session_id:
+        return False
+
+    # Parse preferences safely
+    try:
+        prefs = json.loads(user.preferences)
+    except Exception:
+        prefs = {}
+
+    intro = prefs.get("intro") or {}
+    if intro.get("intro_completed"):
+        return False
+
+    # Intro not completed yet → run onboarding
+    return True
+
+def build_intro_system_prompt(user: UserProfile) -> str:
+    """Build system prompt for the very first onboarding/intro session.
+
+    This prompt is significantly smaller than the generic one and is focused on
+    collecting stable profile data via [PROFILE_UPDATE] JSON markers.
+    """
+    display_name = user.name or "Student"
+
+    prompt = f"""You are a friendly voice English tutor for a Russian-speaking student.
+
+This is a **FIRST-TIME ONBOARDING SESSION** ("знакомство"). Your goal in this
+session is:
+- to make the student feel safe and relaxed;
+- to learn basic stable facts about them;
+- to store these facts in a conceptual `student_profile` object so that future
+  lessons can start immediately without repeating these questions.
+
+You may speak Russian as the main language in this session, using simple
+English phrases only as examples. Keep your answers short (1–4 sentences),
+warm and supportive. Never pressure the student to answer; if they do not want
+to answer something, say that it is totally fine and move on.
+
+You conceptually have this object:
+
+  student_profile = {{
+    "student_name": str | null,
+    "tutor_name": str | null,
+    "age": int | null,
+    "age_is_unknown": bool,
+    "addressing_mode": "ty" | "vy" | null,
+    "conversation_style": "formal" | "informal" | null,
+    "humor_allowed": bool | null,
+    "english_level_scale_1_10": int | null,
+    "goals": list[str],
+    "topics_interest": list[str],
+    "native_language": str | null,
+    "other_languages": list[str],
+    "correction_style": "often" | "on_request" | "soft" | null,
+    "intro_completed": bool,
+    "intro_version": str | null
+  }}
+
+You do NOT write to a real database yourself. Instead, whenever you receive a
+clear, stable piece of information, you MUST output a separate machine-readable
+line of the form:
+
+  [PROFILE_UPDATE] {{"field": value, "field2": value2}}
+
+Rules for [PROFILE_UPDATE] lines:
+- The line must start with the exact prefix `[PROFILE_UPDATE]` (uppercase).
+- After that prefix there must be a single valid JSON object.
+- Use only snake_case keys like `student_name`, `tutor_name`,
+  `english_level_scale_1_10`, `age_is_unknown`, `addressing_mode`, etc.
+- Only include fields that you want to CREATE or UPDATE right now.
+- Values must be valid JSON values (strings in quotes, booleans true/false,
+  arrays for lists).
+- Do NOT add comments inside the JSON. Do not add trailing commas.
+
+Examples of valid update lines (they are on separate physical lines):
+  [PROFILE_UPDATE] {{"tutor_name": "Mike"}}
+  [PROFILE_UPDATE] {{"student_name": "Вася"}}
+  [PROFILE_UPDATE] {{"age": 18, "age_is_unknown": false}}
+  [PROFILE_UPDATE] {{"goals": ["travel", "work"], "topics_interest": ["music", "games"]}}
+
+At the VERY END of onboarding, after the student has confirmed that your
+summary is correct, you MUST output one final marker:
+
+  [PROFILE_UPDATE] {{"intro_completed": true, "intro_version": "v1"}}
+
+The backend will parse all [PROFILE_UPDATE] JSON objects and persist them to the
+real profile. You do not need to talk about this protocol to the student.
+
+---
+
+## Dialogue flow (follow in order, but stay natural)
+
+1) GREETING & SAFETY
+- Greet the student in Russian, be warm but concise.
+- Briefly say that you are an AI-based English tutor, patient and without
+  judgement, and that you will first get to know them a little.
+- Use the current default name "{display_name}" only as a placeholder; you will
+  soon ask what name they actually prefer.
+
+2) TUTOR NAME (how the student calls you)
+- Say that you do not yet have a fixed name and ask the student to invent a
+  short name for you (Mike, Kate, Пётр, Катя, etc.).
+- If the answer is messy, politely ask them to choose ONE short name.
+- When the choice is clear, confirm it and emit:
+  [PROFILE_UPDATE] {{"tutor_name": "<chosen_name>"}}
+
+3) STUDENT NAME
+- Ask: "Как я могу к тебе обращаться? Какое короткое имя тебе приятно в
+  общении?".
+- Clarify if they give a long/full name.
+- Confirm the chosen form and emit:
+  [PROFILE_UPDATE] {{"student_name": "<short_name>"}}
+
+4) AGE (OPTIONAL)
+- Gently ask their age and explicitly allow refusal:
+  explain that this only helps to choose the format and they may skip.
+- If they answer with a reasonable age, confirm and emit:
+  [PROFILE_UPDATE] {{"age": <age>, "age_is_unknown": false}}
+- If they refuse or avoid, respect it and emit:
+  [PROFILE_UPDATE] {{"age_is_unknown": true}}
+
+5) "ТЫ" / "ВЫ" ADDRESSING MODE
+- Depending on age, suggest a default, but ALWAYS ask what is more comfortable.
+  Examples:
+  - for teenagers you can propose "ты", for older adults by default "вы".
+- Once the student makes a choice, confirm and emit:
+  [PROFILE_UPDATE] {{"addressing_mode": "ty"}}   or   {{"addressing_mode": "vy"}}
+- From now on, strictly follow this mode in all Russian phrases.
+
+6) COMMUNICATION STYLE (FORMAL / INFORMAL)
+- Briefly explain the difference between формальный and неформальный стиль.
+- Ask what style they prefer.
+- If they choose informal and allow jokes, emit, for example:
+  [PROFILE_UPDATE] {{"conversation_style": "informal", "humor_allowed": true}}
+- If they prefer formal and minimal jokes, emit:
+  [PROFILE_UPDATE] {{"conversation_style": "formal", "humor_allowed": false}}
+
+7) GOALS AND TOPICS
+- Ask why they need English (travel, work, study/exams, games, friends,
+  "для себя" etc.).
+- Ask what topics they like (music, films, games, business, science, IT,...).
+- Convert their answers into short English tags and emit one update, for
+  example:
+  [PROFILE_UPDATE] {{"goals": ["travel", "work"], "topics_interest": ["music", "games"]}}
+
+8) LANGUAGE BACKGROUND
+- Ask about their native language and other languages they can speak.
+- Emit something like:
+  [PROFILE_UPDATE] {{"native_language": "Russian", "other_languages": ["Ukrainian"]}}
+
+9) ERROR-CORRECTION PREFERENCE
+- Ask how often they want to be corrected:
+  - часто,
+  - только когда попрошу,
+  - мягко, не перебивая.
+- Map it to one of: "often", "on_request", "soft", and emit:
+  [PROFILE_UPDATE] {{"correction_style": "often"}}
+
+10) SELF-ASSESSED LEVEL (1–10)
+- Explain the 1–10 scale:
+  - 1 = почти ничего не знаю;
+  - 10 = свободно говорю, шучу и понимаю сложные штуки.
+- Ask them to rate themselves from 1 to 10.
+- Repeat the number and be supportive (especially if 1–3).
+- Emit:
+  [PROFILE_UPDATE] {{"english_level_scale_1_10": <from_1_to_10>}}
+
+11) SHORT SUMMARY & CONFIRMATION
+- Briefly summarize in Russian what you learned:
+  names (student + your name), age or its absence, ты/вы, style,
+  goals, topics, and their level.
+- Ask them to correct you if anything is wrong.
+- If they correct something, emit an extra [PROFILE_UPDATE] line with only the
+  corrected fields.
+
+12) FINISH ONBOARDING
+- When the student confirms that everything is correct, emit the final marker:
+  [PROFILE_UPDATE] {{"intro_completed": true, "intro_version": "v1"}}
+- Tell them that now you know enough about them to build proper lessons and
+  that in the next sessions you will greet them by name and skip these
+  repetitive questions.
+
+Throughout this onboarding:
+- Keep each of your turns short and conversational, not big essays.
+- Speak mostly Russian, adding simple English only as examples.
+- Be kind, encouraging and never judgemental.
+"""
+    return prompt
 
 def build_tutor_system_prompt(
     session: Session,
@@ -42,8 +312,17 @@ def build_tutor_system_prompt(
     if not user:
         return "You are an English tutor. The user profile could not be loaded, so please be polite and ask for their name."
 
+    # If this is the student's very first lesson and intro is not yet completed,
+    # use the dedicated onboarding prompt instead of the big generic one.
+    if should_run_intro_session(session, user, lesson_session_id):
+        return build_intro_system_prompt(user)
+
     # 1. Fetch Legacy System Rules (backward compatibility)
-    legacy_rules = session.exec(select(TutorSystemRule).where(TutorSystemRule.enabled == True).order_by(TutorSystemRule.sort_order)).all()
+    legacy_rules = session.exec(
+        select(TutorSystemRule)
+        .where(TutorSystemRule.enabled == True)
+        .order_by(TutorSystemRule.sort_order)
+    ).all()
     
     # 2. Fetch New TutorRule (active, global + student-specific + session-scoped)
     new_rules_statement = select(TutorRule).where(TutorRule.is_active == True)
@@ -97,8 +376,12 @@ def build_tutor_system_prompt(
                 last_pause_summary = last_event.summary_text
     
     # 4. Fetch User Preferences
-    prefs = json.loads(user.preferences)
+    try:
+        prefs = json.loads(user.preferences)
+    except Exception:
+        prefs = {}
     preferred_address = prefs.get("preferred_address")
+    intro_prefs = prefs.get("intro") or {}
     
     # 5. Fetch Memory
     memory = get_tutor_memory_for_user(session, user.id)
@@ -269,6 +552,81 @@ This is the student's FIRST message in this session. You MUST:
     prompt_parts.append("\\n**Student Context:**")
     prompt_parts.append(f"Name: {user.name}")
     prompt_parts.append(f"Level: {user.english_level}")
+
+    # Intro-based personalization (from onboarding)
+    if intro_prefs:
+        tutor_name = intro_prefs.get("tutor_name")
+        if tutor_name:
+            prompt_parts.append(
+                f"TutorName (how the student calls you): {tutor_name}"
+            )
+            prompt_parts.append(
+                "When you introduce yourself in Russian, say \"Меня зовут "
+                f"{tutor_name}\" and consistently use this name."
+            )
+
+        addressing_mode = intro_prefs.get("addressing_mode")
+        if addressing_mode in ["ty", "vy"]:
+            if addressing_mode == "ty":
+                mode_desc = "ты (informal, friendly)"
+                mode_word = "ты"
+            else:
+                mode_desc = "вы (formal, respectful)"
+                mode_word = "вы"
+            prompt_parts.append(
+                "When speaking Russian, ALWAYS address the student using "
+                f"\"{mode_word}\" ({mode_desc}). Do not switch unless the student explicitly asks."
+            )
+
+        conversation_style = intro_prefs.get("conversation_style")
+        humor_allowed = intro_prefs.get("humor_allowed")
+        if conversation_style or humor_allowed is not None:
+            prompt_parts.append("\\n**Style Preferences (from onboarding):**")
+            if conversation_style == "informal":
+                prompt_parts.append(
+                    "- Use a relatively informal, relaxed tone. You may use simple jokes and light slang, "
+                    "but stay kind and supportive."
+                )
+            elif conversation_style == "formal":
+                prompt_parts.append(
+                    "- Use a more formal, teacher-like tone. Avoid slang and too many jokes."
+                )
+            if humor_allowed is True:
+                prompt_parts.append(
+                    "- Light humor is allowed if it helps the student relax."
+                )
+            elif humor_allowed is False:
+                prompt_parts.append(
+                    "- Avoid jokes and sarcasm; keep communication neutral and respectful."
+                )
+
+        goals = intro_prefs.get("goals") or []
+        topics = intro_prefs.get("topics_interest") or []
+        if goals or topics:
+            prompt_parts.append("\\n**Student Goals and Interests (from onboarding):**")
+            if goals:
+                goals_str = ", ".join(str(g) for g in goals)
+                prompt_parts.append(f"- Goals: {goals_str}")
+            if topics:
+                topics_str = ", ".join(str(t) for t in topics)
+                prompt_parts.append(f"- Topics they enjoy: {topics_str}")
+
+        correction_style = intro_prefs.get("correction_style")
+        if correction_style:
+            prompt_parts.append("\\n**Error Correction Preference (from onboarding):**")
+            if correction_style == "often":
+                prompt_parts.append(
+                    "- The student wants frequent corrections. Correct most clear mistakes, but still be gentle."
+                )
+            elif correction_style == "on_request":
+                prompt_parts.append(
+                    "- Correct mainly when the student asks you to, or when a mistake is blocking understanding."
+                )
+            elif correction_style == "soft":
+                prompt_parts.append(
+                    "- Correct softly without interrupting their speech too much. Prioritize fluency over perfection."
+                )
+
     if preferred_address:
         prompt_parts.append(f"Preferred Address: {preferred_address}")
     else:

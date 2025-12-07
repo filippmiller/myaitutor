@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Link, useNavigate } from 'react
 import Admin from './pages/Admin';
 import Student from './pages/Student';
 import AuthPage from './pages/AuthPage';
+import { AdminTutorPipelines } from './pages/AdminTutorPipelines';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { RequireAuth } from './components/RequireAuth';
 
@@ -18,7 +19,12 @@ function NavBar() {
         <nav style={{ padding: '1rem', borderBottom: '1px solid #444', marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
                 <Link to="/app" style={{ marginRight: '1rem' }}>Student App</Link>
-                {user?.role === 'admin' && <Link to="/admin">Admin</Link>}
+                {user?.role === 'admin' && (
+                    <>
+                        <Link to="/admin" style={{ marginRight: '1rem' }}>Admin</Link>
+                        <Link to="/admin/pipelines">Tutor Pipelines</Link>
+                    </>
+                )}
             </div>
             <div>
                 {user ? (
@@ -42,6 +48,11 @@ function App() {
                     <NavBar />
                     <Routes>
                         <Route path="/admin" element={<Admin />} />
+                        <Route path="/admin/pipelines" element={
+                            <RequireAuth>
+                                <AdminTutorPipelines />
+                            </RequireAuth>
+                        } />
                         <Route path="/app" element={
                             <RequireAuth>
                                 <Student />
