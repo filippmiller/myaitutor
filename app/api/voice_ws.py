@@ -132,9 +132,21 @@ async def voice_websocket(websocket: WebSocket):
             profile = session.exec(select(UserProfile).where(UserProfile.user_account_id == user.id)).first()
             logger.info(f"Authenticated user: {user.email}")
 
-        # 1. Load Settings
+        # 1. Load Settings - PREFER env var over database (env var is more current)
         settings = session.get(AppSettings, 1)
-        api_key = settings.openai_api_key if settings and settings.openai_api_key else os.getenv("OPENAI_API_KEY")
+        env_api_key = os.getenv("OPENAI_API_KEY")
+        db_api_key = settings.openai_api_key if settings and settings.openai_api_key else None
+
+        # Prioritize env var (Railway sets this), fallback to database
+        if env_api_key:
+            api_key = env_api_key
+            logger.info("Using API key from environment variable")
+        elif db_api_key:
+            api_key = db_api_key
+            logger.info("Using API key from database")
+        else:
+            api_key = None
+
         if api_key:
             api_key = api_key.strip().strip("'").strip('"')
         
@@ -1146,6 +1158,7 @@ async def run_legacy_session(
 
     try:
         from app.services.yandex_service import YandexService, AudioConverter
+        from app.services.voice_engine import get_voice_engine
         yandex_service = YandexService() # Still used for fallback TTS potentially
         converter = AudioConverter() # ffmpeg 48k
         tts_engine = get_voice_engine(tts_engine_name, api_key=api_key)
@@ -1674,9 +1687,11 @@ async def admin_ai_websocket(websocket: WebSocket):
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
             return
 
-        # 1. Load OpenAI settings
+        # 1. Load OpenAI settings - PREFER env var over database
         settings = session.get(AppSettings, 1)
-        api_key = settings.openai_api_key if settings and settings.openai_api_key else os.getenv("OPENAI_API_KEY")
+        env_key = os.getenv("OPENAI_API_KEY")
+        db_key = settings.openai_api_key if settings and settings.openai_api_key else None
+        api_key = env_key if env_key else db_key
         if api_key:
             api_key = api_key.strip().strip("'").strip('"')
         if not api_key:
