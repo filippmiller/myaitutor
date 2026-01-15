@@ -934,6 +934,18 @@ async def run_realtime_session(
                     elif event_type == "session.updated":
                         # Session update confirmed by OpenAI
                         logger.info("Realtime: Session updated confirmed by OpenAI - system prompt is now active")
+
+                    elif event_type == "input_audio_buffer.speech_started":
+                        # 🆕 VAD detected user started speaking
+                        logger.info("Realtime: VAD - User started speaking")
+
+                    elif event_type == "input_audio_buffer.speech_stopped":
+                        # 🆕 VAD detected user stopped speaking
+                        logger.info("Realtime: VAD - User stopped speaking")
+
+                    elif event_type == "input_audio_buffer.committed":
+                        # 🆕 Audio buffer was committed for processing
+                        logger.debug("Realtime: Audio buffer committed for processing")
                     
                     elif event_type == "conversation.item.created":
                         # Conversation item created (legacy handler kept for compatibility).
@@ -943,11 +955,19 @@ async def run_realtime_session(
                         logger.info(f"Realtime: Conversation item created (ID: {item_id}, Type: {item_type})")
                     
                     elif event_type == "response.created":
-                        # Response started
+                        # Response started - tutor is about to speak
                         response = event.get("response", {})
                         response_id = response.get("id")
                         logger.info(f"Realtime: Response created (ID: {response_id})")
                         logger.info(f"Realtime: Response created details: {json.dumps(response, default=str)}")
+
+                        # 🆕 Clear input buffer when tutor starts speaking to prevent echo
+                        try:
+                            clear_buffer_event = {"type": "input_audio_buffer.clear"}
+                            await openai_ws.send(json.dumps(clear_buffer_event))
+                            logger.debug("Realtime: Cleared input audio buffer on response.created")
+                        except Exception as clear_err:
+                            logger.warning(f"Failed to clear input audio buffer: {clear_err}")
                         
                     elif event_type == "response.done":
                         # Response completed
@@ -960,6 +980,15 @@ async def run_realtime_session(
                             logger.error(f"Realtime: Response failed/cancelled details: {json.dumps(response, default=str)}")
                         else:
                             logger.info(f"Realtime: Response usage: {json.dumps(response.get('usage'), default=str)}")
+
+                        # 🆕 CRITICAL: Clear input audio buffer after response to prevent accumulation
+                        # This fixes voice stuttering during long lessons
+                        try:
+                            clear_buffer_event = {"type": "input_audio_buffer.clear"}
+                            await openai_ws.send(json.dumps(clear_buffer_event))
+                            logger.debug("Realtime: Cleared input audio buffer after response.done")
+                        except Exception as clear_err:
+                            logger.warning(f"Failed to clear input audio buffer: {clear_err}")
                         
                     elif event_type == "response.output_item.added":
                         # Output item added (for tracking)
