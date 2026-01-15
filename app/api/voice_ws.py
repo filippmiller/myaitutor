@@ -365,7 +365,7 @@ async def run_realtime_session(
 
     # Determine whether this lesson should run intro/onboarding mode
     intro_mode = should_run_intro_session(session, profile, lesson_session.id)
-    logger.info(f"Intro mode for lesson {lesson_session.id}: {intro_mode}")
+    logger.info(f"Intro mode for lesson {lesson_session.id}: {intro_mode}, is_resume: {is_resume}")
 
     # 🆕 Sync knowledge before building prompt
     if user:
@@ -473,6 +473,55 @@ async def run_realtime_session(
         
         # 2. Configure Session
         # Use audio PCM16 24kHz in and out; enable server-side VAD.
+        # Define tools for profile updates (so they're not vocalized)
+        profile_update_tool = {
+            "type": "function",
+            "name": "update_profile",
+            "description": "Save student profile information collected during the intro conversation. Call this function whenever you learn something new about the student (their name, your name, level, goals, etc). This allows silent data collection without speaking the data aloud.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tutor_name": {
+                        "type": "string",
+                        "description": "The name the student chose for the tutor (e.g., 'Mike', 'Kate', 'Варя')"
+                    },
+                    "student_name": {
+                        "type": "string",
+                        "description": "The student's preferred name"
+                    },
+                    "addressing_mode": {
+                        "type": "string",
+                        "enum": ["ty", "vy"],
+                        "description": "How to address the student: 'ty' (informal ты) or 'vy' (formal вы)"
+                    },
+                    "english_level_scale_1_10": {
+                        "type": "integer",
+                        "description": "Student's self-assessed English level from 1 (nothing) to 10 (fluent)"
+                    },
+                    "goals": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Why the student needs English (work, travel, etc.)"
+                    },
+                    "topics_interest": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Topics the student is interested in"
+                    },
+                    "correction_style": {
+                        "type": "string",
+                        "enum": ["often", "soft", "on_request"],
+                        "description": "How the student prefers to be corrected"
+                    },
+                    "intro_completed": {
+                        "type": "boolean",
+                        "description": "Set to true when the intro/onboarding is complete"
+                    }
+                },
+                "required": []
+            }
+        }
+
         session_update = {
             "type": "session.update",
             "session": {
@@ -482,6 +531,9 @@ async def run_realtime_session(
                 # New-style Realtime audio configuration
                 "output_modalities": ["audio"],
                 "instructions": system_prompt,
+                # Add tools for silent profile updates (only during intro)
+                "tools": [profile_update_tool] if intro_mode else [],
+                "tool_choice": "auto" if intro_mode else "none",
                 "audio": {
                     "input": {
                         "format": {
@@ -639,7 +691,32 @@ async def run_realtime_session(
                                 try:
                                     user_name = profile.name if profile and profile.name else "Student"
 
-                                    if intro_mode:
+                                    if intro_mode and is_resume:
+                                        # 🆕 Resuming an intro lesson that wasn't completed
+                                        # Get the pause summary to provide context
+                                        pause_summary = None
+                                        try:
+                                            last_pause = session.exec(
+                                                select(LessonPauseEvent)
+                                                .where(LessonPauseEvent.lesson_session_id == lesson_session.id)
+                                                .order_by(LessonPauseEvent.paused_at.desc())
+                                                .limit(1)
+                                            ).first()
+                                            if last_pause and last_pause.summary_text:
+                                                pause_summary = last_pause.summary_text
+                                        except Exception:
+                                            pass
+
+                                        context_hint = f" Before the break: {pause_summary}" if pause_summary else ""
+                                        greeting_text = (
+                                            f"System Event: RESUMING Onboarding.{context_hint} "
+                                            f"The student ({user_name}) paused during the intro and is now back. "
+                                            "Welcome them back warmly and CONTINUE where you left off. "
+                                            "Do NOT restart the onboarding from the beginning. "
+                                            "Check what info you still need (name, level, goals) and ask about that. "
+                                            "Use the update_profile function to save any new information."
+                                        )
+                                    elif intro_mode:
                                         # First-ever lesson: trigger dedicated onboarding flow
                                         greeting_text = (
                                             "System Event: First-Time Onboarding. This is the student's very first "
@@ -647,8 +724,8 @@ async def run_realtime_session(
                                             "instructions: greet them warmly, explain that you are an AI English "
                                             "tutor, then follow the steps to choose your name, their preferred "
                                             "name, age (optional), ты/вы, style, goals, interests, languages, "
-                                            "correction style and self-assessed level. After each stable fact, "
-                                            "emit [PROFILE_UPDATE] JSON markers as specified."
+                                            "correction style and self-assessed level. "
+                                            "Use the update_profile function to save each piece of info SILENTLY."
                                         )
                                     else:
                                         # System prompt already includes Universal Greeting Protocol
@@ -994,6 +1071,56 @@ async def run_realtime_session(
                                         session.add(lesson_session)
                                         session.commit()
                                         logger.info(f"Realtime: Language level increased to {lesson_session.language_level}")
+
+                    elif event_type == "response.function_call_arguments.done":
+                        # 🆕 Handle function calls (e.g., update_profile during intro)
+                        call_id = event.get("call_id")
+                        func_name = event.get("name")
+                        arguments = event.get("arguments", "{}")
+
+                        logger.info(f"Realtime: Function call received - {func_name}({arguments[:100]}...)")
+
+                        if func_name == "update_profile" and profile is not None:
+                            try:
+                                args = json.loads(arguments)
+                                # Build a fake transcript line for apply_intro_profile_updates
+                                # This reuses existing logic without duplication
+                                for field, value in args.items():
+                                    fake_line = f"[PROFILE_UPDATE] {json.dumps({field: value})}"
+                                    apply_intro_profile_updates(session, profile, fake_line)
+                                logger.info(f"Realtime: Profile updated via function call: {list(args.keys())}")
+
+                                # Send function result back to OpenAI
+                                func_result = {
+                                    "type": "conversation.item.create",
+                                    "item": {
+                                        "type": "function_call_output",
+                                        "call_id": call_id,
+                                        "output": json.dumps({"status": "success", "updated_fields": list(args.keys())})
+                                    }
+                                }
+                                await openai_ws.send(json.dumps(func_result))
+                                logger.info("Realtime: Sent function result back to OpenAI")
+
+                                # Request continuation of the conversation
+                                continue_request = {
+                                    "type": "response.create",
+                                    "response": {}
+                                }
+                                await openai_ws.send(json.dumps(continue_request))
+
+                            except Exception as func_err:
+                                logger.error(f"Failed to process function call: {func_err}", exc_info=True)
+                                # Send error result
+                                error_result = {
+                                    "type": "conversation.item.create",
+                                    "item": {
+                                        "type": "function_call_output",
+                                        "call_id": call_id,
+                                        "output": json.dumps({"status": "error", "message": str(func_err)})
+                                    }
+                                }
+                                await openai_ws.send(json.dumps(error_result))
 
                     elif event_type == "error":
                         # Treat Realtime errors as fatal so we can fall back cleanly.
