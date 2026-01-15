@@ -6,7 +6,7 @@ and brain analysis pipeline.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, List
 from sqlmodel import Session
 from datetime import datetime
 
@@ -23,19 +23,38 @@ from app.services.tutor_service import (
     get_or_create_student_knowledge
 )
 from app.services.brain_service import BrainService
+from app.services.smart_brain import SmartBrainService, AsyncBrainWorker
+from app.services.knowledge_sync import sync_all_for_user
 
 logger = logging.getLogger(__name__)
+
+# Feature flag: use smart brain (LLM-powered) vs legacy (string matching)
+USE_SMART_BRAIN = True
 
 
 class LessonPipelineManager:
     """Manages lesson lifecycle and coordinates STREAMING + ANALYSIS pipelines."""
-    
-    def __init__(self, session: Session, user: UserAccount):
+
+    def __init__(self, session: Session, user: UserAccount, api_key: Optional[str] = None):
         self.session = session
         self.user = user
         self.tutor_lesson: Optional[TutorLesson] = None
         self.turn_counter = 0
-        self.brain_service = BrainService(session)
+        self.api_key = api_key
+
+        # Use smart brain if enabled, otherwise fall back to legacy
+        if USE_SMART_BRAIN and api_key:
+            self.smart_brain = SmartBrainService(session, api_key)
+            self.brain_service = None  # Legacy service disabled
+            logger.info("Using SMART BRAIN (LLM-powered analysis)")
+        else:
+            self.smart_brain = None
+            self.brain_service = BrainService(session)
+            logger.info("Using LEGACY BRAIN (string matching)")
+
+        # Pending turns for batched analysis
+        self.pending_turns: List[TutorLessonTurn] = []
+        self.last_analysis_time = datetime.utcnow()
     
     def start_lesson(self, legacy_session_id: int) -> TutorLesson:
         """
@@ -76,27 +95,29 @@ class LessonPipelineManager:
         self,
         user_text: Optional[str],
         tutor_text: Optional[str],
-        raw_payload: Optional[dict] = None
+        raw_payload: Optional[dict] = None,
+        context: Optional[dict] = None,
     ) -> Optional[TutorLessonTurn]:
         """
         Save a conversation turn and trigger brain analysis.
-        
+
         Args:
             user_text: What the user said (can be None for tutor-only turns, e.g., greeting)
             tutor_text: What the tutor said (can be None for user-only turns)
             raw_payload: Optional debug payload
-            
+            context: Optional context for brain analysis (language_mode, topics, etc.)
+
         Returns:
             TutorLessonTurn instance or None if lesson not started
         """
         if not self.tutor_lesson:
             logger.warning("Attempted to save turn but lesson not started")
             return None
-        
+
         # Only save if there's actual content
         if not user_text and not tutor_text:
             return None
-        
+
         turn = TutorLessonTurn(
             lesson_id=self.tutor_lesson.id,
             user_id=self.user.id,
@@ -106,29 +127,65 @@ class LessonPipelineManager:
             tutor_text=tutor_text,
             raw_payload_json=raw_payload or {}
         )
-        
+
         self.session.add(turn)
         self.session.commit()
         self.session.refresh(turn)
-        
+
         self.turn_counter += 1
-        
+
         logger.info(
             f"Saved turn {turn.turn_index} for lesson {self.tutor_lesson.id}: "
             f"user={bool(user_text)}, tutor={bool(tutor_text)}"
         )
-        
-        # Trigger brain analysis (synchronous for MVP)
-        try:
-            events = self.brain_service.analyze_turn(turn, self.user)
-            if events:
-                logger.info(
-                    f"Brain analysis generated {len(events)} events for turn {turn.turn_index}"
-                )
-        except Exception as e:
-            logger.error(f"Brain analysis failed for turn {turn.turn_index}: {e}", exc_info=True)
-        
+
+        # 🆕 Smart Brain Analysis (batched for efficiency)
+        if self.smart_brain and user_text:
+            # Add to pending turns for batched analysis
+            self.pending_turns.append(turn)
+
+            # Analyze every 3 turns or if 30 seconds have passed
+            time_since_last = (datetime.utcnow() - self.last_analysis_time).total_seconds()
+            if len(self.pending_turns) >= 3 or time_since_last > 30:
+                try:
+                    self._run_batched_analysis(context)
+                except Exception as e:
+                    logger.error(f"Smart brain analysis failed: {e}", exc_info=True)
+
+        # Legacy brain analysis (if smart brain not available)
+        elif self.brain_service:
+            try:
+                events = self.brain_service.analyze_turn(turn, self.user)
+                if events:
+                    logger.info(
+                        f"Legacy brain analysis generated {len(events)} events for turn {turn.turn_index}"
+                    )
+            except Exception as e:
+                logger.error(f"Legacy brain analysis failed: {e}", exc_info=True)
+
         return turn
+
+    def _run_batched_analysis(self, context: Optional[dict] = None):
+        """Run smart brain analysis on pending turns."""
+        if not self.pending_turns or not self.smart_brain:
+            return
+
+        logger.info(f"Running smart brain analysis on {len(self.pending_turns)} pending turns")
+
+        for turn in self.pending_turns:
+            try:
+                result = self.smart_brain.analyze_turn_sync(turn, self.user, context)
+                events = self.smart_brain.save_analysis_to_db(result, turn, self.user.id)
+                if events:
+                    logger.info(
+                        f"Smart brain generated {len(events)} events for turn {turn.turn_index}"
+                    )
+            except Exception as e:
+                logger.error(f"Smart brain failed on turn {turn.turn_index}: {e}")
+
+        # Clear pending and update timestamp
+        self.pending_turns = []
+        self.last_analysis_time = datetime.utcnow()
     
     def end_lesson(self, summary: Optional[str] = None):
         """Mark lesson as complete and generate end-of-lesson brain event."""

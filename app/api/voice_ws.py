@@ -19,6 +19,11 @@ from app.services.tutor_service import build_tutor_system_prompt, should_run_int
 from app.services.language_utils import parse_language_mode_marker, strip_language_markers
 from app.services.profile_service import apply_intro_profile_updates
 
+# New improved services
+from app.services.prompt_builder import build_simple_prompt, PromptBuilder
+from app.services.language_enforcement import LanguageEnforcer, validate_language_mode, detect_forbidden_language
+from app.services.knowledge_sync import sync_all_for_user, get_knowledge_summary
+
 from collections import deque
 
 # Configure logging
@@ -350,10 +355,22 @@ async def run_realtime_session(
     intro_mode = should_run_intro_session(session, profile, lesson_session.id)
     logger.info(f"Intro mode for lesson {lesson_session.id}: {intro_mode}")
 
-    # Build System Prompt
-    system_prompt = build_tutor_system_prompt(
-        session,
-        profile,
+    # 🆕 Sync knowledge before building prompt
+    if user:
+        try:
+            sync_all_for_user(session, user.id)
+            knowledge_summary = get_knowledge_summary(session, user.id)
+            logger.info(f"Knowledge synced: {knowledge_summary}")
+        except Exception as e:
+            logger.error(f"Knowledge sync failed: {e}", exc_info=True)
+
+    # 🆕 Initialize language enforcer
+    language_enforcer = LanguageEnforcer(mode=None)
+
+    # Build System Prompt using NEW simplified builder
+    system_prompt = build_simple_prompt(
+        db_session=session,
+        profile=profile,
         lesson_session_id=lesson_session.id,
         is_resume=is_resume,
     )
@@ -368,18 +385,20 @@ async def run_realtime_session(
     logger.info(f"  System Prompt (First 500 chars):\n{system_prompt[:500]}")
     logger.info("=" * 80)
 
-    # 🆕 Initialize Multi-Pipeline Manager
+    # 🆕 Initialize Multi-Pipeline Manager with SMART BRAIN
     from app.services.lesson_pipeline_manager import LessonPipelineManager
-    
+
     pipeline_manager = None
     if user:
         try:
-            pipeline_manager = LessonPipelineManager(session, user)
+            # Pass API key to enable smart brain (LLM-powered analysis)
+            pipeline_manager = LessonPipelineManager(session, user, api_key=api_key)
             tutor_lesson = pipeline_manager.start_lesson(legacy_session_id=lesson_session.id)
             logger.info(
                 f"✅ Multi-Pipeline Manager initialized - "
                 f"Lesson #{tutor_lesson.lesson_number}, "
-                f"First lesson: {tutor_lesson.is_first_lesson}"
+                f"First lesson: {tutor_lesson.is_first_lesson}, "
+                f"Smart brain: {pipeline_manager.smart_brain is not None}"
             )
         except Exception as e:
             logger.error(f"❌ Failed to initialize pipeline manager: {e}", exc_info=True)
@@ -886,6 +905,26 @@ async def run_realtime_session(
                             logger.warning(f"Realtime: response.output_item.done - no transcript found in item structure")
                         
                         if transcript:
+                            # 🆕 LANGUAGE VALIDATION - Check for forbidden languages
+                            forbidden_lang = detect_forbidden_language(transcript)
+                            if forbidden_lang:
+                                logger.error(f"🚨 LANGUAGE VIOLATION: Response contains {forbidden_lang}!")
+                                logger.error(f"Violating text: {transcript[:200]}")
+                                # Log to debug channel
+                                await websocket.send_json({
+                                    "type": "debug",
+                                    "level": "warning",
+                                    "message": f"Language violation detected: {forbidden_lang}. Response should be English/Russian only."
+                                })
+
+                            # Validate against current mode
+                            is_valid, reason, action = validate_language_mode(
+                                transcript,
+                                lesson_session.language_mode
+                            )
+                            if not is_valid:
+                                logger.warning(f"Language mode violation: {reason}")
+
                             # Always save Assistant Turn (greeting, normal responses, etc.) (legacy)
                             turn = LessonTurn(
                                 session_id=lesson_session.id,
@@ -924,6 +963,8 @@ async def run_realtime_session(
                                         lesson_session.language_level = 1
                                     session.add(lesson_session)
                                     session.commit()
+                                    # 🆕 Update language enforcer
+                                    language_enforcer.set_mode(mode)
                                     logger.info(f"Realtime: Language mode set to {mode}")
                                 elif level_change == "LEVEL_UP":
                                     if lesson_session.language_level:
@@ -1134,10 +1175,21 @@ async def run_legacy_session(
         session.commit()
         logger.info(f"Legacy: Reusing LessonSession {lesson_session.id} (resume={is_resume})")
 
-    # Build System Prompt
-    system_prompt = build_tutor_system_prompt(
-        session,
-        profile,
+    # 🆕 Sync knowledge before building prompt (same as realtime)
+    if user:
+        try:
+            sync_all_for_user(session, user.id)
+            logger.info(f"Legacy: Knowledge synced for user {user.id}")
+        except Exception as e:
+            logger.error(f"Legacy: Knowledge sync failed: {e}", exc_info=True)
+
+    # 🆕 Initialize language enforcer
+    legacy_language_enforcer = LanguageEnforcer(mode=None)
+
+    # Build System Prompt using NEW simplified builder
+    system_prompt = build_simple_prompt(
+        db_session=session,
+        profile=profile,
         lesson_session_id=lesson_session.id,
         is_resume=is_resume,
     )
@@ -1163,18 +1215,19 @@ async def run_legacy_session(
     except Exception as e:
         logger.error(f"Legacy: failed to write initial prompt log for lesson {lesson_session.id}: {e}")
 
-    # 🆕 Initialize Multi-Pipeline Manager (same as realtime)
+    # 🆕 Initialize Multi-Pipeline Manager with SMART BRAIN (same as realtime)
     from app.services.lesson_pipeline_manager import LessonPipelineManager
-    
+
     pipeline_manager = None
     if user:
         try:
-            pipeline_manager = LessonPipelineManager(session, user)
+            pipeline_manager = LessonPipelineManager(session, user, api_key=api_key)
             tutor_lesson = pipeline_manager.start_lesson(legacy_session_id=lesson_session.id)
             logger.info(
                 f"✅ Legacy: Multi-Pipeline Manager initialized - "
                 f"Lesson #{tutor_lesson.lesson_number}, "
-                f"First lesson: {tutor_lesson.is_first_lesson}"
+                f"First lesson: {tutor_lesson.is_first_lesson}, "
+                f"Smart brain: {pipeline_manager.smart_brain is not None}"
             )
         except Exception as e:
             logger.error(f"❌ Legacy: Failed to initialize pipeline manager: {e}", exc_info=True)
