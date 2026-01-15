@@ -367,13 +367,23 @@ async def run_realtime_session(
     # 🆕 Initialize language enforcer
     language_enforcer = LanguageEnforcer(mode=None)
 
-    # Build System Prompt using NEW simplified builder
-    system_prompt = build_simple_prompt(
-        db_session=session,
-        profile=profile,
-        lesson_session_id=lesson_session.id,
-        is_resume=is_resume,
-    )
+    # Build System Prompt using NEW simplified builder (with fallback to old builder)
+    try:
+        system_prompt = build_simple_prompt(
+            db_session=session,
+            profile=profile,
+            lesson_session_id=lesson_session.id,
+            is_resume=is_resume,
+        )
+        logger.info("Using NEW simplified prompt builder")
+    except Exception as e:
+        logger.error(f"New prompt builder failed, falling back to old: {e}", exc_info=True)
+        system_prompt = build_tutor_system_prompt(
+            session,
+            profile,
+            lesson_session_id=lesson_session.id,
+            is_resume=is_resume,
+        )
     
     # Log system prompt details
     logger.info("=" * 80)
@@ -1186,13 +1196,23 @@ async def run_legacy_session(
     # 🆕 Initialize language enforcer
     legacy_language_enforcer = LanguageEnforcer(mode=None)
 
-    # Build System Prompt using NEW simplified builder
-    system_prompt = build_simple_prompt(
-        db_session=session,
-        profile=profile,
-        lesson_session_id=lesson_session.id,
-        is_resume=is_resume,
-    )
+    # Build System Prompt using NEW simplified builder (with fallback)
+    try:
+        system_prompt = build_simple_prompt(
+            db_session=session,
+            profile=profile,
+            lesson_session_id=lesson_session.id,
+            is_resume=is_resume,
+        )
+        logger.info("Legacy: Using NEW simplified prompt builder")
+    except Exception as e:
+        logger.error(f"Legacy: New prompt builder failed, falling back: {e}", exc_info=True)
+        system_prompt = build_tutor_system_prompt(
+            session,
+            profile,
+            lesson_session_id=lesson_session.id,
+            is_resume=is_resume,
+        )
 
     # Prepare prompt log snapshot (filled with greeting + STT later)
     prompt_log_data = {

@@ -15,6 +15,8 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from sqlmodel import Session, select
 
+logger = logging.getLogger(__name__)
+
 from app.models import (
     UserProfile,
     TutorStudentKnowledge,
@@ -185,6 +187,11 @@ class PromptBuilder:
             return
 
         user_id = self.profile.user_account_id
+
+        # Guard against None user_id
+        if not user_id:
+            logger.warning("Profile has no user_account_id, skipping data load")
+            return
 
         # Load student knowledge
         self.knowledge = self.db.get(TutorStudentKnowledge, user_id)
