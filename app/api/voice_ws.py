@@ -1145,6 +1145,7 @@ async def run_legacy_session(
             logger.error(f"Legacy: failed to send debug packet: {e}")
 
     try:
+        from app.services.yandex_service import YandexService, AudioConverter
         yandex_service = YandexService() # Still used for fallback TTS potentially
         converter = AudioConverter() # ffmpeg 48k
         tts_engine = get_voice_engine(tts_engine_name, api_key=api_key)
