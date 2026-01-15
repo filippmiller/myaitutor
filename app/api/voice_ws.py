@@ -1044,12 +1044,14 @@ async def run_realtime_session(
                         
                         if content:
                             for part in content:
-                                logger.info(f"Realtime: Processing content part: type={part.get('type')}, keys={list(part.keys())}")
-                                if part.get("type") == "audio" and "transcript" in part:
+                                part_type = part.get("type", "")
+                                logger.info(f"Realtime: Processing content part: type={part_type}, keys={list(part.keys())}")
+                                # Handle both "audio" and "output_audio" types (API returns "output_audio")
+                                if part_type in ("audio", "output_audio") and "transcript" in part:
                                     transcript = part["transcript"]
-                                    logger.info(f"Realtime: Found transcript in audio part: '{transcript[:100]}...'")
+                                    logger.info(f"Realtime: Found transcript in {part_type} part: '{transcript[:100]}...'")
                                     break
-                                elif part.get("type") == "text" and "text" in part:
+                                elif part_type == "text" and "text" in part:
                                     transcript = part["text"]
                                     logger.info(f"Realtime: Found transcript in text part: '{transcript[:100]}...'")
                                     break
