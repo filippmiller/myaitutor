@@ -23,6 +23,7 @@ from app.services.profile_service import apply_intro_profile_updates
 from app.services.prompt_builder import build_simple_prompt, PromptBuilder
 from app.services.language_enforcement import LanguageEnforcer, validate_language_mode, detect_forbidden_language
 from app.services.knowledge_sync import sync_all_for_user, get_knowledge_summary
+from app.services.speech_preferences import process_user_speech_preferences
 
 from collections import deque
 
@@ -930,7 +931,33 @@ async def run_realtime_session(
                                     )
                                 except Exception as pm_err:
                                     logger.error(f"Pipeline manager failed to save user turn: {pm_err}")
-                            
+
+                            # 🆕 Detect speech preferences (e.g., "speak slowly")
+                            if user:
+                                try:
+                                    new_rule = process_user_speech_preferences(session, user.id, transcript)
+                                    if new_rule:
+                                        logger.info(f"🎯 Created speech preference rule: {new_rule.title}")
+                                        # Inject the rule into active session immediately
+                                        # This ensures the tutor applies it RIGHT NOW, not just next lesson
+                                        rule_injection = (
+                                            "\n\n🚨 NEW STUDENT PREFERENCE (apply immediately):\n"
+                                            f"{new_rule.description}\n"
+                                            "Apply this to ALL your responses from now on!"
+                                        )
+                                        inject_event = {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "message",
+                                                "role": "system",
+                                                "content": [{"type": "input_text", "text": rule_injection}],
+                                            },
+                                        }
+                                        await openai_ws.send(json.dumps(inject_event))
+                                        logger.info("🎯 Injected speech preference into active session")
+                                except Exception as pref_err:
+                                    logger.error(f"Failed to process speech preferences: {pref_err}")
+
                     elif event_type == "session.updated":
                         # Session update confirmed by OpenAI
                         logger.info("Realtime: Session updated confirmed by OpenAI - system prompt is now active")
