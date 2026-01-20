@@ -1,74 +1,101 @@
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate } from 'react-router-dom';
+import { LogOut, User, Settings, BookOpen } from 'lucide-react';
 import Admin from './pages/Admin';
-import Student from './pages/Student';
+import StudentDashboard from './pages/StudentDashboard';
 import AuthPage from './pages/AuthPage';
 import { AdminTutorPipelines } from './pages/AdminTutorPipelines';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { RequireAuth } from './components/RequireAuth';
+import './App.css';
 
 function NavBar() {
-    const { user, logout } = useAuth();
-    const navigate = useNavigate();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
 
-    const handleLogout = async () => {
-        await logout();
-        navigate('/auth');
-    };
+  const handleLogout = async () => {
+    await logout();
+    navigate('/auth');
+  };
 
-    return (
-        <nav style={{ padding: '1rem', borderBottom: '1px solid #444', marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-                <Link to="/app" style={{ marginRight: '1rem' }}>Student App</Link>
-                {user?.role === 'admin' && (
-                    <>
-                        <Link to="/admin" style={{ marginRight: '1rem' }}>Admin</Link>
-                        <Link to="/admin/pipelines">Tutor Pipelines</Link>
-                    </>
-                )}
+  return (
+    <nav className="navbar">
+      <div className="navbar-brand">
+        <Link to="/" className="navbar-logo">
+          AIlingva
+        </Link>
+      </div>
+
+      <div className="navbar-links">
+        <Link to="/app" className="navbar-link">
+          <BookOpen size={18} />
+          <span>Learn</span>
+        </Link>
+        {user?.role === 'admin' && (
+          <>
+            <Link to="/admin" className="navbar-link">
+              <Settings size={18} />
+              <span>Admin</span>
+            </Link>
+            <Link to="/admin/pipelines" className="navbar-link">
+              <span>Pipelines</span>
+            </Link>
+          </>
+        )}
+      </div>
+
+      <div className="navbar-user">
+        {user ? (
+          <>
+            <div className="navbar-user-info">
+              <User size={18} />
+              <span>{user.full_name || user.email}</span>
             </div>
-            <div>
-                {user ? (
-                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                        <span>Logged in as {user.full_name || user.email}</span>
-                        <button onClick={handleLogout} style={{ padding: '0.4em 0.8em', fontSize: '0.9em' }}>Logout</button>
-                    </div>
-                ) : (
-                    <Link to="/auth">Log in / Sign up</Link>
-                )}
-            </div>
-        </nav>
-    );
+            <button onClick={handleLogout} className="btn btn-ghost btn-sm">
+              <LogOut size={16} />
+              <span className="hide-mobile">Logout</span>
+            </button>
+          </>
+        ) : (
+          <Link to="/auth" className="btn btn-primary btn-sm">
+            Log in
+          </Link>
+        )}
+      </div>
+    </nav>
+  );
 }
 
 function App() {
-    return (
-        <AuthProvider>
-            <Router>
-                <div>
-                    <NavBar />
-                    <Routes>
-                        <Route path="/admin" element={<Admin />} />
-                        <Route path="/admin/pipelines" element={
-                            <RequireAuth>
-                                <AdminTutorPipelines />
-                            </RequireAuth>
-                        } />
-                        <Route path="/app" element={
-                            <RequireAuth>
-                                <Student />
-                            </RequireAuth>
-                        } />
-                        <Route path="/auth" element={<AuthPage />} />
-                        <Route path="/" element={
-                            <RequireAuth>
-                                <Student />
-                            </RequireAuth>
-                        } />
-                    </Routes>
-                </div>
-            </Router>
-        </AuthProvider>
-    );
+  return (
+    <AuthProvider>
+      <Router>
+        <div className="app">
+          <NavBar />
+          <main className="app-main">
+            <Routes>
+              <Route path="/admin" element={<Admin />} />
+              <Route path="/admin/pipelines" element={
+                <RequireAuth>
+                  <AdminTutorPipelines />
+                </RequireAuth>
+              } />
+              <Route path="/app" element={
+                <RequireAuth>
+                  <StudentDashboard />
+                </RequireAuth>
+              } />
+              <Route path="/auth" element={<AuthPage />} />
+              <Route path="/" element={
+                <RequireAuth>
+                  <StudentDashboard />
+                </RequireAuth>
+              } />
+            </Routes>
+          </main>
+        </div>
+      </Router>
+    </AuthProvider>
+  );
 }
 
 export default App;

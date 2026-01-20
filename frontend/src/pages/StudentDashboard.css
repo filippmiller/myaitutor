@@ -1,0 +1,519 @@
+/* StudentDashboard.css - Modern Dashboard Layout */
+
+/* ==================== Dashboard Layout ==================== */
+.dashboard {
+  min-height: 100vh;
+  padding: var(--space-6);
+  background: var(--gradient-bg-radial);
+}
+
+.dashboard-container {
+  max-width: 900px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ==================== Welcome Header ==================== */
+.welcome-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+}
+
+.welcome-content {
+  flex: 1;
+  min-width: 200px;
+}
+
+.welcome-title {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  margin: 0 0 var(--space-2) 0;
+}
+
+.welcome-name {
+  background: var(--gradient-logo);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.welcome-subtitle {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-lg);
+  margin: 0;
+}
+
+.welcome-badges {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.welcome-badge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-glass-bg);
+  backdrop-filter: blur(var(--blur-md));
+  border: 1px solid var(--color-glass-border);
+  border-radius: var(--radius-full);
+}
+
+.badge-streak .badge-icon {
+  color: var(--color-warning);
+}
+
+.badge-xp .badge-icon {
+  color: var(--color-accent-light);
+}
+
+.badge-value {
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+.badge-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ==================== Voice Lesson Hero ==================== */
+.voice-hero {
+  padding: var(--space-8);
+}
+
+.voice-hero-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-6);
+  margin-bottom: var(--space-6);
+}
+
+.voice-hero-title-section {
+  flex: 1;
+}
+
+.voice-hero-title {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0 0 var(--space-2) 0;
+}
+
+.voice-hero-subtitle {
+  color: var(--color-text-secondary);
+  margin: 0;
+  font-size: var(--font-size-base);
+}
+
+.voice-hero-language {
+  min-width: 160px;
+}
+
+.voice-hero-language .select {
+  margin-top: var(--space-1);
+}
+
+.voice-hero-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-6) 0;
+}
+
+.voice-hero-cta {
+  min-width: 280px;
+  padding: var(--space-5) var(--space-8);
+  font-size: var(--font-size-xl);
+}
+
+.voice-hero-cta svg {
+  flex-shrink: 0;
+}
+
+.voice-hero-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-6);
+  width: 100%;
+}
+
+.voice-hero-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.recording-text {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-error);
+}
+
+.voice-hero-buttons {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.voice-hero-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-glass-border);
+  margin-top: var(--space-4);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.status-disconnected { background: var(--color-text-muted); }
+.status-connecting { background: var(--color-warning); animation: pulse 1s infinite; }
+.status-connected { background: var(--color-success); }
+.status-paused { background: var(--color-warning); }
+.status-error { background: var(--color-error); }
+
+.status-text {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ==================== Voice Chat ==================== */
+.voice-chat {
+  padding: var(--space-6);
+}
+
+.voice-chat-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  color: var(--color-text-secondary);
+}
+
+.voice-chat-header h3 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+.voice-chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: var(--space-2);
+}
+
+.chat-message {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.chat-message-user {
+  flex-direction: row-reverse;
+}
+
+.chat-message-avatar {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.chat-message-assistant .chat-message-avatar {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-light);
+}
+
+.chat-bubble-text {
+  line-height: var(--line-height-relaxed);
+}
+
+/* ==================== Progress Cards ==================== */
+.progress-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+}
+
+.stat-card {
+  text-align: center;
+  padding: var(--space-5);
+}
+
+.stat-card-icon {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto var(--space-3);
+}
+
+.stat-icon-accent { background: var(--color-accent-subtle); color: var(--color-accent-light); }
+.stat-icon-success { background: var(--color-success-subtle); color: var(--color-success); }
+.stat-icon-warning { background: var(--color-warning-subtle); color: var(--color-warning); }
+.stat-icon-primary { background: var(--color-accent-subtle); color: var(--color-accent-light); }
+
+/* ==================== Recent Lessons ==================== */
+.recent-lessons {
+  padding: var(--space-6);
+}
+
+.recent-lessons-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  color: var(--color-text-secondary);
+}
+
+.recent-lessons-header h3 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+.recent-lessons-empty {
+  text-align: center;
+  padding: var(--space-8);
+  color: var(--color-text-muted);
+}
+
+.recent-lessons-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.lesson-item {
+  padding: var(--space-4);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.lesson-item-date {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.lesson-item-summary {
+  color: var(--color-text-primary);
+  margin: 0 0 var(--space-3) 0;
+  line-height: var(--line-height-relaxed);
+}
+
+.lesson-item-words {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-2);
+}
+
+.words-more {
+  color: var(--color-text-muted);
+}
+
+.lesson-item-weak {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.weak-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ==================== Profile Settings ==================== */
+.profile-settings {
+  padding: 0;
+  overflow: hidden;
+}
+
+.profile-settings .collapsible-header {
+  padding: var(--space-5) var(--space-6);
+  margin: 0;
+}
+
+.profile-header-content {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.profile-header-content h3 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+.profile-form {
+  padding: 0 var(--space-6) var(--space-6);
+}
+
+/* ==================== Debug Console ==================== */
+.debug-console {
+  padding: var(--space-5);
+}
+
+.debug-console-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-4);
+}
+
+.debug-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+}
+
+.debug-title h3 {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+.debug-console-output {
+  max-height: 250px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--font-size-xs);
+  font-family: 'Monaco', 'Consolas', monospace;
+  background: rgba(0, 0, 0, 0.3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+/* ==================== Responsive ==================== */
+@media (max-width: 768px) {
+  .dashboard {
+    padding: var(--space-4);
+  }
+
+  .dashboard-container {
+    gap: var(--space-4);
+  }
+
+  .welcome-header {
+    flex-direction: column;
+  }
+
+  .welcome-title {
+    font-size: var(--font-size-2xl);
+  }
+
+  .welcome-subtitle {
+    font-size: var(--font-size-base);
+  }
+
+  .voice-hero {
+    padding: var(--space-5);
+  }
+
+  .voice-hero-header {
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .voice-hero-language {
+    width: 100%;
+  }
+
+  .voice-hero-cta {
+    width: 100%;
+    min-width: auto;
+  }
+
+  .voice-hero-buttons {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .voice-hero-buttons .btn {
+    width: 100%;
+  }
+
+  .progress-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .recent-lessons,
+  .profile-settings .collapsible-header,
+  .profile-form {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+}
+
+@media (max-width: 480px) {
+  .dashboard {
+    padding: var(--space-3);
+  }
+
+  .welcome-badges {
+    width: 100%;
+  }
+
+  .welcome-badge {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .voice-hero {
+    padding: var(--space-4);
+  }
+
+  .voice-hero-title {
+    font-size: var(--font-size-xl);
+  }
+
+  .progress-cards {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+  }
+
+  .stat-card {
+    padding: var(--space-4);
+  }
+
+  .stat-card-value {
+    font-size: var(--font-size-xl);
+  }
+}
