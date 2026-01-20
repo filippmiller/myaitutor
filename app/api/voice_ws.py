@@ -24,6 +24,7 @@ from app.services.prompt_builder import build_simple_prompt, PromptBuilder
 from app.services.language_enforcement import LanguageEnforcer, validate_language_mode, detect_forbidden_language
 from app.services.knowledge_sync import sync_all_for_user, get_knowledge_summary
 from app.services.speech_preferences import process_user_speech_preferences
+from app.services.session_rule_manager import SessionRuleManager
 
 from collections import deque
 
@@ -379,6 +380,15 @@ async def run_realtime_session(
 
     # 🆕 Initialize language enforcer
     language_enforcer = LanguageEnforcer(mode=None)
+
+    # 🆕 Initialize session rule manager for dynamic rule tracking
+    rule_manager = None
+    if user:
+        try:
+            rule_manager = SessionRuleManager(session, user, lesson_session)
+            logger.info(f"✅ SessionRuleManager initialized with {len(rule_manager.active_rules)} active rules")
+        except Exception as e:
+            logger.error(f"Failed to initialize SessionRuleManager: {e}", exc_info=True)
 
     # Build System Prompt using NEW simplified builder (with fallback to old builder)
     try:
@@ -773,6 +783,22 @@ async def run_realtime_session(
                                     await openai_ws.send(json.dumps(response_request))
                                     logger.info("Realtime: Greeting response request sent")
                                     await _send_debug("to_openai", "realtime_greeting", response_request)
+
+                                    # 🆕 Inject initial rules after greeting (if any active rules exist)
+                                    if rule_manager:
+                                        initial_rules = rule_manager.get_initial_rules_injection()
+                                        if initial_rules:
+                                            rules_inject_event = {
+                                                "type": "conversation.item.create",
+                                                "item": {
+                                                    "type": "message",
+                                                    "role": "system",
+                                                    "content": [{"type": "input_text", "text": initial_rules}],
+                                                },
+                                            }
+                                            await openai_ws.send(json.dumps(rules_inject_event))
+                                            await _send_debug("to_openai", "initial_rules_injection", rules_inject_event)
+                                            logger.info(f"🎯 Injected {len(rule_manager.active_rules)} initial rules at session start")
                                 except Exception as greeting_error:
                                     logger.error(f"Realtime: Failed to trigger greeting: {greeting_error}", exc_info=True)
                                     await websocket.send_json({
@@ -932,14 +958,43 @@ async def run_realtime_session(
                                 except Exception as pm_err:
                                     logger.error(f"Pipeline manager failed to save user turn: {pm_err}")
 
-                            # 🆕 Detect speech preferences (e.g., "speak slowly")
-                            if user:
+                            # 🆕 Process user preferences using SessionRuleManager
+                            # This detects commands like "speak Russian", "speak slowly" and injects
+                            # them into the active OpenAI conversation as system messages
+                            if rule_manager:
+                                try:
+                                    rule_injection = rule_manager.process_user_turn(transcript)
+                                    if rule_injection:
+                                        logger.info(f"🎯 Rule injection triggered: {rule_injection[:100]}...")
+                                        inject_event = {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "message",
+                                                "role": "system",
+                                                "content": [{"type": "input_text", "text": rule_injection}],
+                                            },
+                                        }
+                                        await openai_ws.send(json.dumps(inject_event))
+                                        await _send_debug("to_openai", "rule_injection", inject_event)
+                                        logger.info("🎯 Injected rule into active session via conversation.item.create")
+
+                                        # Update language mode on lesson session if changed
+                                        new_lang_mode = rule_manager.get_language_mode()
+                                        if new_lang_mode and new_lang_mode != lesson_session.language_mode:
+                                            lesson_session.language_mode = new_lang_mode
+                                            lesson_session.language_chosen_at = datetime.utcnow()
+                                            session.add(lesson_session)
+                                            session.commit()
+                                            logger.info(f"🎯 Updated lesson language_mode to: {new_lang_mode}")
+                                except Exception as rule_err:
+                                    logger.error(f"Failed to process rules via SessionRuleManager: {rule_err}")
+
+                            # Legacy fallback - still call old speech preferences for compatibility
+                            elif user:
                                 try:
                                     new_rule = process_user_speech_preferences(session, user.id, transcript)
                                     if new_rule:
-                                        logger.info(f"🎯 Created speech preference rule: {new_rule.title}")
-                                        # Inject the rule into active session immediately
-                                        # This ensures the tutor applies it RIGHT NOW, not just next lesson
+                                        logger.info(f"🎯 Created speech preference rule (legacy): {new_rule.title}")
                                         rule_injection = (
                                             "\n\n🚨 NEW STUDENT PREFERENCE (apply immediately):\n"
                                             f"{new_rule.description}\n"
@@ -954,7 +1009,7 @@ async def run_realtime_session(
                                             },
                                         }
                                         await openai_ws.send(json.dumps(inject_event))
-                                        logger.info("🎯 Injected speech preference into active session")
+                                        logger.info("🎯 Injected speech preference into active session (legacy)")
                                 except Exception as pref_err:
                                     logger.error(f"Failed to process speech preferences: {pref_err}")
 
