@@ -869,8 +869,6 @@ async def run_realtime_session(
                     logger.error(f"Frontend->OpenAI RuntimeError: {e}")
             except Exception as e:
                 logger.error(f"Frontend->OpenAI Error: {e}")
-            except Exception as e:
-                logger.error(f"Frontend->OpenAI Error: {e}")
             finally:
                 input_converter.stdin.close()
 

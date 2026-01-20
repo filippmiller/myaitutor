@@ -28,8 +28,6 @@ from app.models import (
 )
 from app.services.language_enforcement import get_language_enforcement_prompt, LanguageMode
 
-logger = logging.getLogger(__name__)
-
 
 # ============================================================
 # CORE IDENTITY (Never changes)
