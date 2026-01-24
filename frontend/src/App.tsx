@@ -3,9 +3,11 @@ import { LogOut, User, Settings, BookOpen } from 'lucide-react';
 import Admin from './pages/Admin';
 import StudentDashboard from './pages/StudentDashboard';
 import AuthPage from './pages/AuthPage';
+import LandingPage from './pages/LandingPage';
 import { AdminTutorPipelines } from './pages/AdminTutorPipelines';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { RequireAuth } from './components/RequireAuth';
+import { RequireAdmin } from './components/RequireAdmin';
 import './App.css';
 
 function NavBar() {
@@ -73,11 +75,15 @@ function App() {
           <NavBar />
           <main className="app-main">
             <Routes>
-              <Route path="/admin" element={<Admin />} />
+              <Route path="/admin" element={
+                <RequireAdmin>
+                  <Admin />
+                </RequireAdmin>
+              } />
               <Route path="/admin/pipelines" element={
-                <RequireAuth>
+                <RequireAdmin>
                   <AdminTutorPipelines />
-                </RequireAuth>
+                </RequireAdmin>
               } />
               <Route path="/app" element={
                 <RequireAuth>
@@ -85,11 +91,7 @@ function App() {
                 </RequireAuth>
               } />
               <Route path="/auth" element={<AuthPage />} />
-              <Route path="/" element={
-                <RequireAuth>
-                  <StudentDashboard />
-                </RequireAuth>
-              } />
+              <Route path="/" element={<LandingPage />} />
             </Routes>
           </main>
         </div>
