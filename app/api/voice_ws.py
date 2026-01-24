@@ -25,6 +25,11 @@ from app.services.language_enforcement import LanguageEnforcer, validate_languag
 from app.services.knowledge_sync import sync_all_for_user, get_knowledge_summary
 from app.services.speech_preferences import process_user_speech_preferences
 from app.services.session_rule_manager import SessionRuleManager
+from app.services.error_messages import (
+    is_critical_api_error,
+    get_student_error_message,
+    classify_api_error,
+)
 
 from collections import deque
 
@@ -154,7 +159,13 @@ async def voice_websocket(websocket: WebSocket):
         
         if not api_key:
             logger.error("OpenAI API Key missing")
-            await websocket.send_json({"type": "system", "level": "error", "message": "OpenAI API Key missing."})
+            friendly_msg = get_student_error_message("api_key_missing")
+            await websocket.send_json({
+                "type": "system",
+                "level": "error",
+                "message": friendly_msg,
+                "technical_detail": "OpenAI API Key missing",
+            })
             await websocket.close(code=1011)
             return
 
@@ -231,8 +242,27 @@ async def voice_websocket(websocket: WebSocket):
                 return # If successful and finishes normally
             except Exception as e:
                 logger.error(f"Realtime Session failed: {e}", exc_info=True)
-                await websocket.send_json({"type": "system", "level": "warning", "message": f"Realtime connection failed: {str(e)}. Switching to standard mode."})
-                # Fall through to legacy
+                error_str = str(e)
+                # Check if this is a critical error that affects all services
+                if is_critical_api_error(error_str) or "Critical API error" in error_str:
+                    error_key = classify_api_error(error_str)
+                    friendly_msg = get_student_error_message(error_key)
+                    await websocket.send_json({
+                        "type": "system",
+                        "level": "error",
+                        "message": friendly_msg,
+                        "technical_detail": error_str,
+                        "is_critical": True,
+                    })
+                    await websocket.close(code=1011)
+                    return
+                # Non-critical: fall through to legacy mode
+                await websocket.send_json({
+                    "type": "system",
+                    "level": "warning",
+                    "message": "Realtime connection issue. Switching to standard mode.",
+                    "technical_detail": error_str,
+                })
         
         # 3. Legacy Session (Whisper/Yandex)
         logger.info("Starting Legacy Session (Whisper/Yandex)...")
@@ -259,6 +289,23 @@ async def voice_websocket(websocket: WebSocket):
         logger.info("WebSocket disconnected")
     except Exception as e:
         logger.error(f"Main loop error: {e}", exc_info=True)
+        # Send student-friendly error message for unhandled errors
+        error_str = str(e)
+        try:
+            if is_critical_api_error(error_str):
+                error_key = classify_api_error(error_str)
+                friendly_msg = get_student_error_message(error_key)
+            else:
+                friendly_msg = get_student_error_message("all_fallbacks_failed")
+            await websocket.send_json({
+                "type": "system",
+                "level": "error",
+                "message": friendly_msg,
+                "technical_detail": error_str,
+                "is_critical": True,
+            })
+        except Exception:
+            pass  # WebSocket may already be closed
     finally:
         session.close()
         logger.info("Cleanup complete")
@@ -1236,22 +1283,38 @@ async def run_realtime_session(
                     elif event_type == "error":
                         # Treat Realtime errors as fatal so we can fall back cleanly.
                         logger.error(f"OpenAI Realtime Error event: {json.dumps(event, default=str)[:500]}")
-                        # Surface a readable message to the frontend for debugging.
                         error_obj = event.get("error") or {}
                         message = error_obj.get("message") or str(event)
-                        try:
-                            await websocket.send_json(
-                                {
+
+                        # Check if this is a critical error (quota, billing, auth)
+                        if is_critical_api_error(message):
+                            # Send student-friendly message for critical errors
+                            error_key = classify_api_error(message)
+                            friendly_msg = get_student_error_message(error_key)
+                            try:
+                                await websocket.send_json({
                                     "type": "system",
                                     "level": "error",
-                                    "message": f"OpenAI Realtime error: {message}",
-                                }
-                            )
-                        except Exception:
-                            # If WS to frontend is already closing, just continue shutdown.
-                            pass
-                        # Raise to trigger fallback to legacy mode in the caller.
-                        raise RuntimeError(f"OpenAI Realtime error: {message}")
+                                    "message": friendly_msg,
+                                    "technical_detail": message,
+                                    "is_critical": True,
+                                })
+                            except Exception:
+                                pass
+                            # Critical errors should not fall back - they affect all services
+                            raise RuntimeError(f"Critical API error: {message}")
+                        else:
+                            # Non-critical errors can fall back to legacy mode
+                            try:
+                                await websocket.send_json({
+                                    "type": "system",
+                                    "level": "warning",
+                                    "message": f"Realtime connection issue. Switching to standard mode.",
+                                    "technical_detail": message,
+                                })
+                            except Exception:
+                                pass
+                            raise RuntimeError(f"OpenAI Realtime error: {message}")
                     else:
                         # Log unhandled events for debugging
                         logger.warning(

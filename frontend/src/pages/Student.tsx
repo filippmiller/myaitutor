@@ -37,6 +37,7 @@ export default function Student() {
 
     const [debugEnabled, setDebugEnabled] = useState(false);
     const [debugLines, setDebugLines] = useState<string[]>([]);
+    const [errorMessage, setErrorMessage] = useState<{ message: string; technical?: string } | null>(null);
     const chatEndRef = useRef<HTMLDivElement | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
 
@@ -97,10 +98,11 @@ export default function Student() {
     };
 
     const startLesson = async (isResume: boolean) => {
-        // Reset debug console for new connection (but keep on resume within same lesson)
+        // Reset debug console and error message for new connection (but keep on resume within same lesson)
         if (!isResume) {
             setDebugLines([]);
         }
+        setErrorMessage(null);  // Clear any previous error
         console.log('🚀 [START LESSON] Initiating...');
         try {
             // 1. Get Microphone Access
@@ -208,7 +210,10 @@ export default function Student() {
                         } else if (msg.type === 'system') {
                             console.log(`[SYSTEM] ${msg.level}: ${msg.message}`);
                             if (msg.level === 'error') {
-                                alert(`Error: ${msg.message}`);
+                                setErrorMessage({
+                                    message: msg.message,
+                                    technical: msg.technical_detail
+                                });
                                 setConnectionStatus('Error');
                             } else if (msg.level === 'info' && msg.message === 'Lesson paused.') {
                                 // Server confirmed pause; keep WS open until it closes, UI already stopped mic/audio.
@@ -491,6 +496,46 @@ export default function Student() {
                         <div className="status-indicator" style={{ marginBottom: '10px', color: '#888' }}>
                             Status: {connectionStatus}
                         </div>
+
+                        {errorMessage && (
+                            <div style={{
+                                backgroundColor: '#ff4444',
+                                color: 'white',
+                                padding: '15px',
+                                borderRadius: '8px',
+                                marginBottom: '15px',
+                                position: 'relative'
+                            }}>
+                                <button
+                                    onClick={() => setErrorMessage(null)}
+                                    style={{
+                                        position: 'absolute',
+                                        top: '5px',
+                                        right: '10px',
+                                        background: 'none',
+                                        border: 'none',
+                                        color: 'white',
+                                        cursor: 'pointer',
+                                        fontSize: '1.2em',
+                                        padding: '0'
+                                    }}
+                                >
+                                    ×
+                                </button>
+                                <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>
+                                    ⚠️ Lesson Interrupted
+                                </div>
+                                <div>{errorMessage.message}</div>
+                                {errorMessage.technical && (
+                                    <details style={{ marginTop: '10px', fontSize: '0.9em', opacity: 0.8 }}>
+                                        <summary style={{ cursor: 'pointer' }}>Technical details</summary>
+                                        <div style={{ marginTop: '5px', fontFamily: 'monospace' }}>
+                                            {errorMessage.technical}
+                                        </div>
+                                    </details>
+                                )}
+                            </div>
+                        )}
 
                         <div className="chat-box" style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             {transcript.map((t, i) => (
