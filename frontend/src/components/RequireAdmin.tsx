@@ -11,8 +11,11 @@ export function RequireAdmin({ children }: { children: JSX.Element }) {
 
     // Show loading while checking auth status
     if (initializing) {
-        return <div className="auth-loading">Checking permissions...</div>;
+        return <div className="auth-loading">ADMIN_AUTH_CHECK_v2...</div>;
     }
+
+    // SECURITY: Log auth state for debugging (remove in production)
+    console.log('[RequireAdmin] Auth state:', { user: user?.email, role: user?.role, initializing });
 
     // Not logged in - redirect to auth
     if (!user) {
