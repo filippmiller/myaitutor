@@ -198,8 +198,7 @@ export function useVoiceLesson(options: UseVoiceLessonOptions): UseVoiceLessonRe
                 // Only merge if this is a streaming fragment (no "final" flag) AND last message was assistant
                 if (last && last.role === 'assistant' && msg.role === 'assistant' && !msg.final) {
                   const newPrev = [...prev];
-                  const separator = last.text.endsWith(' ') ? '' : ' ';
-                  newPrev[prev.length - 1] = { ...last, text: last.text + separator + msg.text };
+                  newPrev[prev.length - 1] = { ...last, text: last.text + msg.text };
                   return newPrev;
                 }
                 // Don't add empty final markers to transcript

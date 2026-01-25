@@ -771,19 +771,16 @@ async def run_realtime_session(
                                             f"The student ({user_name}) paused during the intro and is now back. "
                                             "Welcome them back warmly and CONTINUE where you left off. "
                                             "Do NOT restart the onboarding from the beginning. "
-                                            "Check what info you still need (name, level, goals) and ask about that. "
+                                            "Check what info you still need and ask ONLY ONE question. "
                                             "Use the update_profile function to save any new information."
                                         )
                                     elif intro_mode:
                                         # First-ever lesson: trigger dedicated onboarding flow
                                         greeting_text = (
                                             "System Event: First-Time Onboarding. This is the student's very first "
-                                            "lesson with you. Run the onboarding flow described in your system "
-                                            "instructions: greet them warmly, explain that you are an AI English "
-                                            "tutor, then follow the steps to choose your name, their preferred "
-                                            "name, age (optional), ты/вы, style, goals, interests, languages, "
-                                            "correction style and self-assessed level. "
-                                            "Use the update_profile function to save each piece of info SILENTLY."
+                                            "lesson with you. Greet warmly, then ask ONLY the FIRST onboarding "
+                                            "question: what name they want to call you. Ask ONE question only and "
+                                            "wait for their answer. Use the update_profile function to save new info."
                                         )
                                     else:
                                         # System prompt already includes Universal Greeting Protocol
@@ -821,8 +818,13 @@ async def run_realtime_session(
                                         "response": {
                                             # Session is already configured for audio output; no need for modalities here.
                                             "instructions": (
-                                                f"Greet the user {user_name} warmly and start the lesson immediately. "
-                                                "Do not ask if they are ready."
+                                                f"Greet the user {user_name} warmly and start immediately. "
+                                                "Ask ONLY ONE short question and then wait."
+                                                if intro_mode
+                                                else (
+                                                    f"Greet the user {user_name} warmly and start the lesson immediately. "
+                                                    "Do not ask if they are ready."
+                                                )
                                             ),
                                         },
                                     }

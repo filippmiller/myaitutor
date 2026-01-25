@@ -126,6 +126,34 @@ def build_intro_system_prompt(user: UserProfile) -> str:
     collecting stable profile data via [PROFILE_UPDATE] JSON markers.
     """
     display_name = user.name or "Student"
+    known_info_block = ""
+    try:
+        prefs = json.loads(user.preferences or "{}")
+    except Exception:
+        prefs = {}
+    intro = prefs.get("intro") or {}
+    known_items = []
+    if intro.get("tutor_name"):
+        known_items.append(f"tutor_name: {intro.get('tutor_name')}")
+    if intro.get("student_name"):
+        known_items.append(f"student_name: {intro.get('student_name')}")
+    if intro.get("addressing_mode"):
+        known_items.append(f"addressing_mode: {intro.get('addressing_mode')}")
+    if intro.get("english_level_scale_1_10") is not None:
+        known_items.append(f"english_level_scale_1_10: {intro.get('english_level_scale_1_10')}")
+    if intro.get("goals"):
+        known_items.append(f"goals: {', '.join(intro.get('goals', []))}")
+    if intro.get("topics_interest"):
+        known_items.append(f"topics_interest: {', '.join(intro.get('topics_interest', []))}")
+    if intro.get("correction_style"):
+        known_items.append(f"correction_style: {intro.get('correction_style')}")
+    if intro.get("native_language"):
+        known_items.append(f"native_language: {intro.get('native_language')}")
+    if intro.get("other_languages"):
+        known_items.append(f"other_languages: {', '.join(intro.get('other_languages', []))}")
+
+    if known_items:
+        known_info_block = "\nKnown intro info (do NOT ask again unless missing):\n- " + "\n- ".join(known_items) + "\n"
 
     prompt = f"""You are a friendly voice English tutor for a Russian-speaking student.
 
@@ -140,6 +168,12 @@ You may speak Russian as the main language in this session, using simple
 English phrases only as examples. Keep your answers short (1–4 sentences),
 warm and supportive. Never pressure the student to answer; if they do not want
 to answer something, say that it is totally fine and move on.
+
+CRITICAL DIALOGUE RULES:
+- Ask ONLY ONE question per turn, then WAIT for their reply.
+- Do NOT stack multiple questions in a single message.
+- If the student already answered something, do NOT ask again.
+{known_info_block}
 
 You conceptually have this object:
 

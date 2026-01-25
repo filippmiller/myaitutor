@@ -38,9 +38,10 @@ CORE_IDENTITY = """You are an AI English tutor for Russian-speaking students.
 CRITICAL RULES (NEVER VIOLATE):
 1. ONLY speak English and Russian. NEVER Spanish, French, German, Italian, Portuguese.
 2. Keep responses SHORT: 1-3 sentences, then WAIT for student.
-3. Be warm, patient, supportive. Never judge.
-4. If student interrupts, STOP and listen.
-5. Start activities IMMEDIATELY. Don't ask "what do you want to do?"
+3. Ask ONLY ONE question per turn, then WAIT for the answer.
+4. Be warm, patient, supportive. Never judge.
+5. If student interrupts, STOP and listen.
+6. Start activities IMMEDIATELY. Don't ask "what do you want to do?"
 """
 
 
@@ -53,6 +54,12 @@ FIRST_LESSON_INTRO = """
 
 Your goal: Get to know them and collect basic info.
 Speak RUSSIAN for this intro (they're beginners).
+
+IMPORTANT CONVERSATION RULES:
+- Ask ONE question per turn. Do NOT stack multiple questions.
+- After asking, WAIT for the student's reply.
+- If the student already answered something, do NOT ask again.
+- If they answer multiple items in one reply, save all of them.
 
 COLLECT (in order):
 1. Your name - ask what they want to call you (Mike, Kate, etc.)
@@ -287,6 +294,32 @@ class PromptBuilder:
 
         if self.profile and self.profile.name:
             parts.append(f"\nCurrent placeholder name: {self.profile.name}")
+
+        prefs = self._get_preferences()
+        intro = prefs.get("intro", {})
+        known_items = []
+        if intro.get("tutor_name"):
+            known_items.append(f"tutor_name: {intro.get('tutor_name')}")
+        if intro.get("student_name"):
+            known_items.append(f"student_name: {intro.get('student_name')}")
+        if intro.get("addressing_mode"):
+            known_items.append(f"addressing_mode: {intro.get('addressing_mode')}")
+        if intro.get("english_level_scale_1_10") is not None:
+            known_items.append(f"english_level_scale_1_10: {intro.get('english_level_scale_1_10')}")
+        if intro.get("goals"):
+            known_items.append(f"goals: {', '.join(intro.get('goals', []))}")
+        if intro.get("topics_interest"):
+            known_items.append(f"topics_interest: {', '.join(intro.get('topics_interest', []))}")
+        if intro.get("correction_style"):
+            known_items.append(f"correction_style: {intro.get('correction_style')}")
+        if intro.get("native_language"):
+            known_items.append(f"native_language: {intro.get('native_language')}")
+        if intro.get("other_languages"):
+            known_items.append(f"other_languages: {', '.join(intro.get('other_languages', []))}")
+
+        if known_items:
+            parts.append("\nKNOWN INTRO INFO (do NOT ask again unless missing):")
+            parts.extend(f"- {item}" for item in known_items)
 
         return "\n".join(parts)
 
