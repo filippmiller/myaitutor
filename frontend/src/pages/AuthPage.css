@@ -99,7 +99,6 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-4);
-  opacity: 0;
 }
 
 .auth-value-icon {
@@ -132,7 +131,6 @@
 .auth-brand-footer {
   text-align: center;
   margin-top: var(--space-12);
-  opacity: 0;
 }
 
 .auth-brand-footer p {
@@ -158,7 +156,6 @@
 
 .auth-form-card {
   padding: var(--space-8);
-  opacity: 0;
 }
 
 /* Mobile header */
