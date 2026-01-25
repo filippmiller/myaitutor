@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
 export default function AuthForm() {
   const { login, register } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [isLogin, setIsLogin] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -20,6 +21,8 @@ export default function AuthForm() {
     setError(null);
     setLoading(true);
 
+    const from = (location.state as { from?: { pathname?: string } })?.from?.pathname || '/app';
+
     try {
       if (isLogin) {
         await login({ email, password });
@@ -31,7 +34,7 @@ export default function AuthForm() {
         }
         await register({ email, password, full_name: fullName });
       }
-      navigate('/');
+      navigate(from, { replace: true });
     } catch (err: any) {
       console.error("Auth error:", err);
       setError(err.message || "Authentication failed. Please try again.");
