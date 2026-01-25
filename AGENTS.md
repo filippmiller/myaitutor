@@ -29,3 +29,7 @@ VITE_API_PROXY_TARGET=http://127.0.0.1:8010 npm run dev -- --port 5175 --strictP
 ```
 
 Open `http://localhost:5175`.
+
+## Logs and Debugging
+
+Inventory and locations: `docs/LOGS_AND_DEBUGGING.md`
